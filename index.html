@@ -581,6 +581,24 @@ function renderGroups(groups, itemFn, issueFn){
       <div class="grp" onclick="toggleGrp(this)"><span class="gchev">${ex?'▾':'▸'}</span>${esc(k)} · ${arr.length}${badge}</div>
       <div class="grpitems" style="${ex?'':'display:none'}">${arr.map(itemFn).join('')}</div>
     </div>`; }).join(''); }
+// Stock : deux grandes catégories (Matières premières / Emballages),
+// puis les sous-catégories triées en dessous (deux niveaux dépliables).
+function renderGroupsMPEmb(arts, itemFn){
+  const top=[['Matières premières', (arts||[]).filter(a=>a.categorie!=='Emballage')],
+             ['Emballages', (arts||[]).filter(a=>a.categorie==='Emballage')]];
+  return top.filter(([,arr])=>arr.length).map(([label,arr])=>{
+    const tkey='top-'+label; const tex=isExpanded(tkey);
+    const inner=groupBy(arr, a=>a.sous_categorie||a.categorie).map(([k,items])=>{
+      const skey=label+'·'+k; const sex=isExpanded(skey);
+      return `<div class="grpwrap" data-key="${esc(skey)}">
+        <div class="grp" onclick="toggleGrp(this)" style="padding-left:18px"><span class="gchev">${sex?'▾':'▸'}</span>${esc(k)} · ${items.length}</div>
+        <div class="grpitems" style="${sex?'':'display:none'}">${items.map(itemFn).join('')}</div>
+      </div>`; }).join('');
+    return `<div class="grpwrap" data-key="${esc(tkey)}">
+      <div class="grp" onclick="toggleGrp(this)" style="background:var(--gris-c);color:var(--encre);font-size:12.5px"><span class="gchev">${tex?'▾':'▸'}</span>${esc(label)} · ${arr.length}</div>
+      <div class="grpitems" style="${tex?'':'display:none'}">${inner}</div>
+    </div>`; }).join('');
+}
 function toggleGrp(h){ const wrap=h.parentNode; const items=wrap.querySelector('.grpitems'); const key=wrap.dataset.key;
   const s=STATE.ui.screen; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]=STATE.ui.exp[s]||{};
   const willExpand = items.style.display==='none';
@@ -789,6 +807,16 @@ function renderGoulotGroups(rows){
 
 /* ---------- CAPACITÉ (analyse exhaustive des goulots) ---------- */
 function isMP(d){ return !(d.art && d.art.categorie==='Emballage'); }
+// Explique pourquoi un produit n'a aucune matière première consommée
+// (cause la plus fréquente : batch pâte/crème introuvable ou sans composition).
+function mpDiag(p){ try{ if(!p) return null; const probs=[];
+  const chk=(code,label)=>{ if(!code) return; const b=batchByCode(code);
+    if(!b) probs.push(label+' : batch '+code+' introuvable');
+    else if(!(poidsStd(b)>0)) probs.push(label+' : batch « '+(b.nom||code)+' » sans composition'); };
+  chk(p.code_pate,'Pâte'); chk(p.code_creme,'Crème'); chk(p.code_creme_2,'Crème 2');
+  if(!p.code_pate && !p.code_creme && !p.code_creme_2) probs.push('Aucune pâte ni crème définie dans la recette');
+  return probs.length?probs.join(' · '):null;
+}catch(e){ return null; } }
 function fmtDateFr(s){ try{ if(!s || s==='0000-00-00') return null;
     const p=String(s).slice(0,10).split('-'); if(p.length!==3) return null;
     return p[2]+'/'+p[1]+'/'+p[0]; }catch(e){ return null; } }
@@ -829,7 +857,7 @@ function viewCapaciteProduit(g){
       </div>
     </div>
     <div class="grpitems" style="${ex?'':'display:none'};padding:8px 4px 2px">
-      ${capSection('Matières premières', mpDet)||'<div class="sub">Aucune matière première.</div>'}
+      ${capSection('Matières premières', mpDet)||('<div class="rosub">Matières premières</div><div class="sub" style="color:var(--rouge)">⚠ '+esc(mpDiag(prodByName(g.nom))||'Aucune matière première consommée.')+'</div>')}
       ${capSection('Emballages', embDet)||'<div class="sub" style="margin-top:6px">Aucun emballage.</div>'}
     </div>
   </div>`;
@@ -885,10 +913,13 @@ function viewCapacite(){
       <span class="sub" style="white-space:nowrap">Stock estimé au ${d||'—'}</span></div>
     <div class="hint" style="margin-bottom:8px">Cartons encore fabricables avec le stock estimé (dernier inventaire + entrées − sorties théoriques). Goulot matière première (MP) et emballage (EMB) calculés séparément.</div>
     ${seg}</div>`;
+  let warn='';
+  try{ if(!STATE.batches || !STATE.batches.length)
+    warn='<div class="card"><div class="alert"><span>⚠</span><span>Aucun batch (pâte/crème) chargé : les besoins en <b>matières premières</b> ne peuvent pas être calculés. Vérifiez l\'onglet Batches.</span></div></div>'; }catch(e){}
   let body;
   try{ body = v==='matiere'?viewCapaciteParMatiere(G.rows):viewCapaciteParProduit(G.rows); }
   catch(e){ body='<div class="muted" style="padding:14px">Erreur d\'affichage de la capacité.</div>'; }
-  return head+body;
+  return head+warn+body;
 }
 
 function viewAccueil(){
@@ -1296,7 +1327,6 @@ function currentStock(){ const map={}; const sA=latestSession('Atelier'), sD=lat
   return {map, dateA:sA?sA.date:null, dateD:sD?sD.date:null}; }
 function viewStock(){ const {map,dateA,dateD}=currentStock();
   const arts=[...STATE.articles].sort((a,b)=>a.designation.localeCompare(b.designation));
-  const groups=groupBy(arts,a=>a.sous_categorie||a.categorie);
   const itemFn=(a)=>{ const s=map[a.code]||{atelier:0,depot:0}; const tot=(s.atelier||0)+(s.depot||0);
     return `<div class="item" data-s="${(a.designation+' '+a.code).toLowerCase()}">
       <div class="t"><div class="nm">${a.designation}</div><div class="sub"><span class="code">${a.code}</span></div></div>
@@ -1313,7 +1343,7 @@ function viewStock(){ const {map,dateA,dateD}=currentStock();
   </div>
   <input class="search" placeholder="Rechercher un article…" oninput="filterList(this.value,'stock')">
   ${grpBar()}
-  <div class="card" style="padding:4px 12px" id="stocklist">${renderGroups(groups,itemFn)}</div>`;
+  <div class="card" style="padding:4px 12px" id="stocklist">${renderGroupsMPEmb(arts,itemFn)}</div>`;
 }
 function newInventaire(loc){ const s=latestSession(loc); const prev={}; if(s) s.lignes.forEach(l=>prev[l.code]=l.qte);
   const lignes=STATE.articles.map(a=>({code:a.code,qte:prev[a.code]||0}));
