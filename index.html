@@ -394,12 +394,12 @@ async function runMigration(){
 
 /* ---------- Rôles (filtrage d'interface, pas de sécurité forte) ---------- */
 const ROLE_VISIBLE_TABS = {
-  production:['accueil','besoins','plan','production','stock'],
+  production:['accueil','besoins','capacite','plan','production','stock'],
   magasin:['accueil','stock','commandes'],
   operateur:['accueil','production']
 };
 const ROLE_ALLOWED_SCREENS = {
-  production:['accueil','production','besoins','plan','stock','edit-prod'],
+  production:['accueil','production','besoins','capacite','plan','stock','edit-prod'],
   magasin:['accueil','stock','commandes','edit-inv','edit-entree','edit-cmd','edit-fourn'],
   operateur:['accueil','production','edit-prod']
 };
@@ -695,7 +695,7 @@ function recetteStatut(p){
 }
 
 /* ---------- navigation ---------- */
-const TABS=[['accueil','Accueil'],['previsionnel','Prévisionnel'],['besoins','Besoins'],['plan','Plan'],['production','Production'],['stock','Stock'],['commandes','Commandes'],['produits','Recettes'],['batches','Batches'],['articles','Articles'],['reglages','Réglages']];
+const TABS=[['accueil','Accueil'],['previsionnel','Prévisionnel'],['besoins','Besoins'],['capacite','Capacité'],['plan','Plan'],['production','Production'],['stock','Stock'],['commandes','Commandes'],['produits','Recettes'],['batches','Batches'],['articles','Articles'],['reglages','Réglages']];
 function go(screen,extra){ const prev=STATE.ui.screen;
   if(!screenAllowed(screen)){ toast('Accès non autorisé pour votre rôle'); screen='accueil'; extra=null; }
   if(prev && prev.indexOf('edit-')===0) commitRefs(prev);
@@ -786,6 +786,111 @@ function renderGoulotGroups(rows){
       <div class="grpitems" style="${ex?'':'display:none'}">${arr.map(viewGoulotProduit).join('')}</div>
     </div>`; }).join('');
 }
+
+/* ---------- CAPACITÉ (analyse exhaustive des goulots) ---------- */
+function isMP(d){ return !(d.art && d.art.categorie==='Emballage'); }
+function fmtDateFr(s){ try{ if(!s || s==='0000-00-00') return null;
+    const p=String(s).slice(0,10).split('-'); if(p.length!==3) return null;
+    return p[2]+'/'+p[1]+'/'+p[0]; }catch(e){ return null; } }
+// Carte détail d'une matière dans le sous-onglet "Par produit" (mobile-first, pas de table).
+function capMatCard(d, isLim){
+  const nom=d.art?d.art.designation:d.code;
+  return `<div class="lossrow" style="padding:8px;border:0;border-radius:9px;margin-bottom:6px;background:${isLim?'#fbecef':'var(--gris-c)'}">
+    <div class="row spread" style="gap:8px">
+      <div style="min-width:0"><div style="font-weight:600;font-size:13.5px${isLim?';color:var(--rouge)':''}">${esc(nom)}</div>
+        <div class="sub"><span class="code">${esc(d.code)}</span></div></div>
+      <div class="num" style="font-weight:800;white-space:nowrap;color:${isLim?'var(--rouge)':'var(--encre)'}">${nf(Math.max(0,Math.floor(d.cap)),0)} cart.</div>
+    </div>
+    <div class="row spread" style="margin-top:3px">
+      <span class="sub">conso ${nf(d.besoin,3)}/carton</span>
+      <span class="sub">stock ${nf(d.stock,0)}</span>
+    </div>${isLim?'<div class="sub" style="margin-top:2px;color:var(--rouge);font-weight:700">⚑ goulot</div>':''}
+  </div>`;
+}
+function capSection(title, arr){ if(!arr.length) return '';
+  const minCap=Math.min(...arr.map(d=>d.cap));
+  const cards=arr.slice().sort((a,b)=>a.cap-b.cap)
+    .map(d=>capMatCard(d, d.cap===minCap)).join('');
+  return `<div class="rosub">${title}</div>${cards}`;
+}
+function viewCapaciteProduit(g){
+  const key='cap-prod-'+g.nom; const ex=isExpanded(key);
+  const sp=goulotSplit(g);
+  const mpN = sp.mp?Math.max(0,Math.floor(sp.mp.cap)):null;
+  const embN = sp.emb?Math.max(0,Math.floor(sp.emb.cap)):null;
+  const det=g.details||[];
+  const mpDet=det.filter(isMP), embDet=det.filter(d=>!isMP(d));
+  const sum=(lbl,n)=>`<span class="sub" style="white-space:nowrap"><b style="color:${goulotCol(n)}">${lbl} ${n==null?'—':nf(n,0)}</b></span>`;
+  return `<div class="grpwrap" data-key="${esc(key)}">
+    <div class="grp" style="text-transform:none;font-size:13px;letter-spacing:0;color:var(--encre)" onclick="toggleGrp(this)">
+      <div class="row spread" style="gap:8px;width:100%">
+        <span><span class="gchev">${ex?'▾':'▸'}</span> ${esc(g.nom)}</span>
+        <span class="row" style="gap:10px">${sum('MP',mpN)}${sum('EMB',embN)}</span>
+      </div>
+    </div>
+    <div class="grpitems" style="${ex?'':'display:none'};padding:8px 4px 2px">
+      ${capSection('Matières premières', mpDet)||'<div class="sub">Aucune matière première.</div>'}
+      ${capSection('Emballages', embDet)||'<div class="sub" style="margin-top:6px">Aucun emballage.</div>'}
+    </div>
+  </div>`;
+}
+function viewCapaciteParProduit(rows){
+  if(!rows.length) return '<div class="muted" style="padding:14px">Renseignez les recettes et un inventaire pour estimer la capacité.</div>';
+  const groups=groupBy(rows, r=>r.cat);
+  return grpBar()+`<div class="card" style="padding:4px 12px">`+groups.map(([k,arr])=>{
+    const key='cap-cat-'+k; const ex=isExpanded(key);
+    return `<div class="grpwrap" data-key="${esc(key)}">
+      <div class="grp" onclick="toggleGrp(this)"><span class="gchev">${ex?'▾':'▸'}</span>${esc(k)} · ${arr.length}</div>
+      <div class="grpitems" style="${ex?'':'display:none'}">${arr.map(viewCapaciteProduit).join('')}</div>
+    </div>`; }).join('')+`</div>`;
+}
+// Regroupe les goulots (MP + EMB) par article : quels produits il limite et à quelle capacité.
+function capByMatiere(rows){
+  const map={};
+  rows.forEach(g=>{ const sp=goulotSplit(g);
+    [sp.mp, sp.emb].forEach(d=>{ if(!d) return;
+      const m=map[d.code]||(map[d.code]={code:d.code, art:d.art, stock:d.stock, prods:[]});
+      m.prods.push({nom:g.nom, cap:d.cap}); }); });
+  const list=Object.keys(map).map(c=>{ const m=map[c];
+    m.prods.sort((a,b)=>a.cap-b.cap); m.minCap=m.prods.length?m.prods[0].cap:0; return m; });
+  return list.sort((a,b)=>a.minCap-b.minCap);
+}
+function viewCapaciteParMatiere(rows){
+  const list=capByMatiere(rows);
+  if(!list.length) return '<div class="muted" style="padding:14px">Aucun article limitant pour le moment.</div>';
+  return list.map(m=>{ const nom=m.art?m.art.designation:m.code;
+    const col=goulotCol(Math.floor(m.minCap));
+    const prods=m.prods.map(p=>`<div class="row spread" style="padding:5px 2px;border-bottom:1px solid var(--ligne)">
+        <span style="min-width:0">${esc(p.nom)}</span>
+        <span class="num" style="font-weight:700;white-space:nowrap;color:${goulotCol(Math.floor(p.cap))}">${nf(Math.max(0,Math.floor(p.cap)),0)} cart.</span></div>`).join('');
+    return `<div class="card">
+      <div class="row spread" style="gap:8px">
+        <div style="min-width:0"><div style="font-weight:700">${esc(nom)}</div>
+          <div class="sub"><span class="code">${esc(m.code)}</span> · stock ${nf(m.stock,0)}</div></div>
+        <div class="num" style="font-weight:800;padding:3px 10px;border-radius:7px;background:${col};color:#fff;white-space:nowrap">${nf(Math.max(0,Math.floor(m.minCap)),0)} cart.</div>
+      </div>
+      <div class="rosub" style="margin-top:8px">Limite ${m.prods.length} produit(s)</div>
+      ${prods}
+    </div>`; }).join('');
+}
+function viewCapacite(){
+  let G; try{ G=computeGoulots(); }catch(e){ G={rows:[], ref:''}; }
+  const v=STATE.ui.capView==='matiere'?'matiere':'produit';
+  const seg=`<div class="seg">
+    <button class="segbtn ${v==='produit'?'on':''}" onclick="STATE.ui.capView='produit';render()">Par produit</button>
+    <button class="segbtn ${v==='matiere'?'on':''}" onclick="STATE.ui.capView='matiere';render()">Par matière</button></div>`;
+  const d=fmtDateFr(G.ref);
+  const head=`<div class="card"><div class="row spread" style="gap:8px;margin-bottom:8px">
+      <h2 style="margin:0">Capacité de production</h2>
+      <span class="sub" style="white-space:nowrap">Stock estimé au ${d||'—'}</span></div>
+    <div class="hint" style="margin-bottom:8px">Cartons encore fabricables avec le stock estimé (dernier inventaire + entrées − sorties théoriques). Goulot matière première (MP) et emballage (EMB) calculés séparément.</div>
+    ${seg}</div>`;
+  let body;
+  try{ body = v==='matiere'?viewCapaciteParMatiere(G.rows):viewCapaciteParProduit(G.rows); }
+  catch(e){ body='<div class="muted" style="padding:14px">Erreur d\'affichage de la capacité.</div>'; }
+  return head+body;
+}
+
 function viewAccueil(){
   const cur=new Date().getFullYear();
   const today=new Date().toISOString().slice(0,10);
@@ -2030,6 +2135,7 @@ function render(){
   if(s==='accueil') h=viewAccueil();
   else if(s==='previsionnel') h=viewPrevisionnel();
   else if(s==='besoins') h=viewBesoins();
+  else if(s==='capacite') h=viewCapacite();
   else if(s==='plan') h=viewPlan();
   else if(s==='production') h=viewProduction();
   else if(s==='edit-prod') h=viewEditProd();
