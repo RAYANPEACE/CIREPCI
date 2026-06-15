@@ -112,6 +112,13 @@ table.pgrid{border-collapse:separate;border-spacing:0;font-size:14px}
 .stockbox{display:inline-block;min-width:48px;text-align:right;padding:2px 7px;border-radius:6px;font-weight:700;font-variant-numeric:tabular-nums;font-size:12px}
 .stockbox.at{background:#e7eff8;color:var(--acier-d);border:1px solid #c9dbf0}
 .stockbox.de{background:#e9f5ee;color:var(--vert);border:1px solid #c8e6d4}
+.gcathead{display:flex;align-items:center;gap:10px;padding:11px 8px;border-bottom:1px solid var(--ligne);background:#fafbf9;cursor:pointer;user-select:none}
+.gcathead .gcat-nm{font-weight:800;font-size:13px;color:var(--encre);text-transform:uppercase;letter-spacing:.04em}
+.gcathead .gcat-sub{font-size:11.5px;color:var(--gris);margin-top:1px}
+.gcathead .gcat-r{margin-left:auto;text-align:right;flex:0 0 auto}
+.gcathead .gcat-tot{font-weight:800;font-size:16px;color:var(--encre)}
+.gcathead .gcat-totlbl{font-size:10px;color:var(--gris);text-transform:uppercase;letter-spacing:.03em}
+.goulotbar{position:sticky;top:var(--hh,140px);z-index:20;background:#fff;padding:8px 0;border-bottom:1px solid var(--ligne);margin-bottom:2px}
 @media (min-width:900px){
   main:has(.gridwrap){max-width:min(96vw,1400px)}
 }
@@ -450,19 +457,32 @@ function viewGoulotProduit(g){
         <span class="albadge" style="background:var(--rouge)">GOULOT</span>
         <span class="sub">${esc(g.limArt?g.limArt.designation:(g.limCode||'—'))}</span>
       </div>
-      <div class="grp" style="margin:6px -2px -2px;padding:6px 2px 2px;border:0;background:transparent" onclick="toggleGrp(this.parentNode.parentNode)">
+      <div class="grp" style="margin:6px -2px -2px;padding:6px 2px 2px;border:0;background:transparent" onclick="togGoulot(this)">
         <span class="gchev">${ex?'▾':'▸'}</span> Détail des matières
       </div>
     </div>
     <div class="grpitems" style="${ex?'':'display:none'}">${matieres}</div>
   </div>`;
 }
+function togGoulot(el){ const wrap=el.closest('.grpwrap'); if(!wrap)return;
+  const items=wrap.querySelector(':scope > .grpitems'); const key=wrap.dataset.key;
+  const s=STATE.ui.screen; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]=STATE.ui.exp[s]||{};
+  const willExpand=items.style.display==='none';
+  items.style.display=willExpand?'':'none'; STATE.ui.exp[s][key]=willExpand;
+  const ch=el.querySelector('.gchev'); if(ch) ch.textContent=willExpand?'▾':'▸'; }
+function goulotKeys(){ return groupBy(computeGoulots().rows, r=>r.cat).map(g=>'goulot-cat-'+g[0]); }
+function setAllGoulots(open){ const s='accueil'; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]=STATE.ui.exp[s]||{};
+  goulotKeys().forEach(k=>STATE.ui.exp[s][k]=open); render(); }
 function renderGoulotGroups(rows){
   const groups=groupBy(rows, r=>r.cat);
   return groups.map(([k,arr])=>{ const key='goulot-cat-'+k; const ex=isExpanded(key);
-    const catMin=Math.min(...arr.map(r=>r.maxCartons));
+    const total=arr.reduce((s,r)=>s+r.maxCartons,0);
     return `<div class="grpwrap" data-key="${esc(key)}">
-      <div class="grp" onclick="toggleGrp(this)"><span class="gchev">${ex?'▾':'▸'}</span>${esc(k)} · ${arr.length} · goulot ${nf(catMin,0)} cart.</div>
+      <div class="gcathead" onclick="togGoulot(this)">
+        <span class="gchev">${ex?'▾':'▸'}</span>
+        <div><div class="gcat-nm">${esc(k)}</div><div class="gcat-sub">${arr.length} produit${arr.length>1?'s':''} fini${arr.length>1?'s':''}</div></div>
+        <div class="gcat-r"><div class="gcat-tot num">${nf(total,0)}</div><div class="gcat-totlbl">cartons produisables</div></div>
+      </div>
       <div class="grpitems" style="${ex?'':'display:none'}">${arr.map(viewGoulotProduit).join('')}</div>
     </div>`; }).join('');
 }
@@ -501,8 +521,11 @@ function viewAccueil(){
 
   let gCard;
   if(!G.rows.length) gCard='<div class="muted">Renseignez les recettes et un inventaire pour estimer la capacit\u00e9.</div>';
-  else gCard=renderGoulotGroups(G.rows);
-  const cardGoulots=`<div class="card"><h2>Capacit\u00e9 de production \u2014 goulots</h2><div class="hint" style="margin-bottom:8px">Cartons encore fabricables avec le stock actuel estim\u00e9 (dernier inventaire + entr\u00e9es \u2212 sorties), par cat\u00e9gorie. Le goulot indique la mati\u00e8re la plus limitante.</div>${gCard}</div>`;
+  else gCard=`<div class="goulotbar"><div class="row" style="gap:8px">
+      <button class="btn sm sec" onclick="setAllGoulots(true)">Tout d\u00e9plier</button>
+      <button class="btn sm ghost" onclick="setAllGoulots(false)">Tout replier</button>
+    </div></div>${renderGoulotGroups(G.rows)}`;
+  const cardGoulots=`<div class="card"><h2>Capacit\u00e9 de production \u2014 goulots</h2><div class="hint" style="margin-bottom:8px">Cartons encore fabricables avec le stock actuel estim\u00e9 (dernier inventaire + entr\u00e9es \u2212 sorties), par cat\u00e9gorie. Le total = somme des cartons produisables de tous les produits finis de la cat\u00e9gorie ; pour chaque produit, le goulot est la mati\u00e8re la plus limitante.</div>${gCard}</div>`;
 
   const cardCmd=`<div class="card" onclick="go('commandes')" style="cursor:pointer"><h2>Commandes</h2>
     <div class="row" style="gap:18px;flex-wrap:wrap">
