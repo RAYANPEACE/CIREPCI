@@ -592,21 +592,33 @@ function toggleGrp(h){ const wrap=h.parentNode; const items=wrap.querySelector('
 // met à jour le DOM et les flags STATE.ui.exp pour conserver l'état au prochain rendu.
 function setAllGroups(expand){
   const s=STATE.ui.screen; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]=STATE.ui.exp[s]||{};
-  const view=document.getElementById('view'); if(!view) return;
+  const view=document.getElementById('view'); if(!view) return null;
+  let first=null;
+  // On ne touche qu'aux sections de l'écran VISIBLE (#view), jamais à la navigation.
   view.querySelectorAll('.grpwrap').forEach(w=>{
     const items=w.querySelector('.grpitems'), chev=w.querySelector('.gchev'), key=w.dataset.key;
     if(items) items.style.display = expand?'':'none';
     if(chev) chev.textContent = expand?'▾':'▸';
     if(key) STATE.ui.exp[s][key]=expand;
+    if(!first) first=w; // première section, pour le recentrage après dépli
   });
+  return first;
 }
-function expandAll(){ setAllGroups(true); }
-function collapseAll(){ setAllGroups(false); }
+// Stoppe la propagation pour qu'un éventuel conteneur cliquable (carte onclick="go(...)")
+// ne déclenche pas de navigation parasite, puis agit en place sur l'écran courant.
+function expandAll(ev){ if(ev){ if(ev.preventDefault)ev.preventDefault(); if(ev.stopPropagation)ev.stopPropagation(); }
+  const first=setAllGroups(true);
+  if(first) scrollCardIntoView(first.querySelector('.grp')||first);
+}
+function collapseAll(ev){ if(ev){ if(ev.preventDefault)ev.preventDefault(); if(ev.stopPropagation)ev.stopPropagation(); }
+  setAllGroups(false);
+}
 function grpBar(){ return `<div class="stickybar"><div class="row" style="gap:8px;justify-content:flex-end">
-  <button class="btn sm ghost" onclick="expandAll()">▼ Tout déplier</button>
-  <button class="btn sm ghost" onclick="collapseAll()">▲ Tout replier</button></div></div>`; }
+  <button type="button" class="btn sm ghost" onclick="expandAll(event)">▼ Tout déplier</button>
+  <button type="button" class="btn sm ghost" onclick="collapseAll(event)">▲ Tout replier</button></div></div>`; }
 function scrollCardIntoView(el){ if(!el) return; const hd=document.querySelector('header'); const hh=hd?hd.offsetHeight:0;
-  const y=el.getBoundingClientRect().top + window.pageYOffset - hh - 8; window.scrollTo({top:y, behavior:'smooth'}); }
+  const sb=document.querySelector('.stickybar'); const sh=(sb&&getComputedStyle(sb).position==='sticky')?sb.offsetHeight:0;
+  const y=el.getBoundingClientRect().top + window.pageYOffset - hh - sh - 8; window.scrollTo({top:y, behavior:'smooth'}); }
 function isBlankBatch(b){ return !b.code && poidsStd(b)===0; }
 function isBlankProd(p){ return !p.nom; }
 function isBlankArt(a){ return !a.code && !a.designation; }
