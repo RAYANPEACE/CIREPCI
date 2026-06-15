@@ -756,36 +756,33 @@ function computeGoulots(){ const {stock,ref}=stockNow();
     return {nom:p.nom, cat:p.categorie||'—', maxCartons:Math.max(0,Math.floor(lim.cap)), limCode:lim.code, limArt:lim.art, stockLim:lim.stock, besoinLim:lim.besoin, details}; })
     .filter(Boolean).sort((a,b)=>a.maxCartons-b.maxCartons);
   return {rows, ref}; }
+// Sépare les goulots d'un produit en deux : matières premières (catégorie 'Matière')
+// et emballages (catégorie 'Emballage'). Renvoie la MP/EMB la plus limitante de chaque côté.
+function goulotSplit(g){
+  const mp=[], emb=[];
+  (g.details||[]).forEach(d=>{ if(!(d.besoin>0)) return;
+    if(d.art && d.art.categorie==='Emballage') emb.push(d); else mp.push(d); });
+  const pick=arr=>{ if(!arr.length) return null; let best=arr[0]; arr.forEach(d=>{ if(d.cap<best.cap) best=d; }); return best; };
+  return {mp:pick(mp), emb:pick(emb)};
+}
+// Rouge si < 100 cartons, orange si < 300, vert sinon.
+function goulotCol(n){ return n==null?'var(--gris)':(n<100?'var(--rouge)':(n<300?'#b8791f':'var(--vert)')); }
 function viewGoulotProduit(g){
-  const key='goulot-det-'+g.nom; const ex=isExpanded(key);
-  const col=g.maxCartons<=0?'var(--rouge)':(g.maxCartons<200?'#b8791f':'var(--vert)');
-  const matieres=g.details.map(d=>{ const nom=d.art?d.art.designation:d.code; const isLim=d.code===g.limCode;
-    return `<div class="row spread" style="padding:5px 2px;border-bottom:1px solid var(--ligne)${isLim?';background:#fbecef':''}">
-      <div><div style="font-weight:600;font-size:13px${isLim?';color:var(--rouge)':''}">${esc(nom)}</div><div class="sub">${nf(d.besoin,3)}/u · stock ${nf(d.stock,0)}</div></div>
-      <div class="num" style="font-weight:700">≈ ${nf(d.cap,0)} u</div></div>`; }).join('');
-  return `<div class="grpwrap" data-key="${esc(key)}">
-    <div class="lossrow">
-      <div class="row spread">
-        <div style="font-weight:600">${esc(g.nom)}</div>
-        <div class="num" style="font-weight:800;padding:3px 10px;border-radius:7px;background:${col};color:#fff">${nf(g.maxCartons,0)} unités</div>
-      </div>
-      <div class="row spread" style="margin-top:4px">
-        <span class="albadge" style="background:var(--rouge)">GOULOT</span>
-        <span class="sub">${esc(g.limArt?g.limArt.designation:(g.limCode||'—'))}</span>
-      </div>
-      <div class="grp" style="margin:6px -2px -2px;padding:6px 2px 2px;border:0;background:transparent" onclick="toggleGrp(this.parentNode.parentNode)">
-        <span class="gchev">${ex?'▾':'▸'}</span> Détail des matières
-      </div>
-    </div>
-    <div class="grpitems" style="${ex?'':'display:none'}">${matieres}</div>
+  const sp=goulotSplit(g);
+  const line=(label,d)=>{ if(!d) return `<div class="sub" style="padding:1px 0">${label} : —</div>`;
+    const n=Math.max(0,Math.floor(d.cap)); const nom=d.art?d.art.designation:d.code;
+    return `<div class="sub" style="padding:1px 0"><b style="color:${goulotCol(n)}">${label} : ${nf(n,0)} cartons</b> · goulot : ${esc(nom)}</div>`; };
+  return `<div class="lossrow">
+    <div style="font-weight:600;margin-bottom:2px">${esc(g.nom)}</div>
+    ${line('MP', sp.mp)}
+    ${line('EMB', sp.emb)}
   </div>`;
 }
 function renderGoulotGroups(rows){
   const groups=groupBy(rows, r=>r.cat);
   return groups.map(([k,arr])=>{ const key='goulot-cat-'+k; const ex=isExpanded(key);
-    const catMin=Math.min(...arr.map(r=>r.maxCartons));
     return `<div class="grpwrap" data-key="${esc(key)}">
-      <div class="grp" onclick="toggleGrp(this)"><span class="gchev">${ex?'▾':'▸'}</span>${esc(k)} · ${arr.length} · goulot ${nf(catMin,0)} cart.</div>
+      <div class="grp" onclick="toggleGrp(this)"><span class="gchev">${ex?'▾':'▸'}</span>${esc(k)} · ${arr.length}</div>
       <div class="grpitems" style="${ex?'':'display:none'}">${arr.map(viewGoulotProduit).join('')}</div>
     </div>`; }).join('');
 }
@@ -825,7 +822,7 @@ function viewAccueil(){
   let gCard;
   if(!G.rows.length) gCard='<div class="muted">Renseignez les recettes et un inventaire pour estimer la capacit\u00e9.</div>';
   else gCard=renderGoulotGroups(G.rows);
-  const cardGoulots=`<div class="card"><h2>Capacit\u00e9 de production \u2014 goulots</h2><div class="hint" style="margin-bottom:8px">Cartons encore fabricables avec le stock actuel estim\u00e9 (dernier inventaire + entr\u00e9es \u2212 sorties), par cat\u00e9gorie. Le goulot indique la mati\u00e8re la plus limitante.</div>${gCard}</div>`;
+  const cardGoulots=`<div class="card"><h2>Capacit\u00e9 de production \u2014 goulots</h2><div class="hint" style="margin-bottom:8px">Cartons encore fabricables avec le stock actuel estim\u00e9 (dernier inventaire + entr\u00e9es \u2212 sorties). Pour chaque produit, le goulot mati\u00e8re premi\u00e8re (MP) et le goulot emballage (EMB) sont indiqu\u00e9s s\u00e9par\u00e9ment.</div>${gCard}</div>`;
 
   const cardCmd=`<div class="card" onclick="go('commandes')" style="cursor:pointer"><h2>Commandes</h2>
     <div class="row" style="gap:18px;flex-wrap:wrap">
@@ -842,7 +839,7 @@ function viewAccueil(){
 
   const cardCoh=`<div class="card" onclick="go('produits')" style="cursor:pointer"><h2>Coh\u00e9rence des donn\u00e9es</h2>${incoh?`<div class="alert"><span>\u26a0</span><span>${incoh} incoh\u00e9rence(s) recette / batch \u00e0 v\u00e9rifier</span></div>`:'<div class="alert ok"><span>\u2713</span><span>Aucune incoh\u00e9rence d\u00e9tect\u00e9e</span></div>'}</div>`;
 
-  return stat+cardAppro+(G.rows.length?grpBar():'')+cardGoulots+cardProd+cardCmd+cardCoh;
+  return stat+cardAppro+cardGoulots+cardProd+cardCmd+cardCoh;
 }
 
 
