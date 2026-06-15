@@ -244,7 +244,7 @@ function ensureIds(){ SB_TABLES.forEach(t=>{ if(t.k!=='id') return; const arr=ST
 function stateForCache(){ return {articles:STATE.articles,batches:STATE.batches,produits:STATE.produits,
   previsionnel:STATE.previsionnel,inventaires:STATE.inventaires,entrees_mp:STATE.entrees_mp,commandes:STATE.commandes,
   production:STATE.production,fournisseurs:STATE.fournisseurs,fournisseur_article:STATE.fournisseur_article,
-  parametres:STATE.parametres,jours_ouvres:STATE.jours_ouvres}; }
+  parametres:STATE.parametres,jours_ouvres:STATE.jours_ouvres,plan:STATE.plan}; }
 function cacheLocal(){ try{ localStorage.setItem(KEY, JSON.stringify(stateForCache())); }catch(e){} }
 
 /* ---------- Auth ---------- */
@@ -325,12 +325,12 @@ function scheduleSync(){ if(!sbClient || !navigator.onLine || !sbOnline) return;
 
 /* ---------- Rôles (filtrage d'interface, pas de sécurité forte) ---------- */
 const ROLE_VISIBLE_TABS = {
-  production:['accueil','production','besoins','stock'],
+  production:['accueil','besoins','plan','production','stock'],
   magasin:['accueil','stock','commandes'],
   operateur:['accueil','production']
 };
 const ROLE_ALLOWED_SCREENS = {
-  production:['accueil','production','besoins','stock','edit-prod'],
+  production:['accueil','production','besoins','plan','stock','edit-prod'],
   magasin:['accueil','stock','commandes','edit-inv','edit-entree','edit-cmd','edit-fourn'],
   operateur:['accueil','production','edit-prod']
 };
@@ -389,6 +389,7 @@ function applyDefaults(){
   STATE.ui = STATE.ui || {}; STATE.ui.screen='accueil';
   ['previsionnel','inventaires','entrees_mp','commandes','fournisseurs','fournisseur_article','jours_ouvres','production'].forEach(k=>{ if(!Array.isArray(STATE[k])) STATE[k]=clone(SEED[k]||[]); });
   if(!STATE.parametres) STATE.parametres=clone(SEED.parametres||{});
+  if(!STATE.plan || typeof STATE.plan!=='object' || Array.isArray(STATE.plan)) STATE.plan={};
   migrate(); buildLists();
 }
 function load(){
@@ -502,6 +503,7 @@ function groupKeys(){ const s=STATE.ui.screen;
   if(s==='produits') return groupBy(STATE.produits,p=>p.categorie).map(g=>g[0]);
   if(s==='stock'||s==='edit-inv') return groupBy(STATE.articles,a=>a.sous_categorie||a.categorie).map(g=>g[0]);
   if(s==='commandes') return ['Ouverte','Partielle','Clôturée'];
+  if(s==='plan') return groupBy(planEligible(),p=>p.categorie||'—').map(g=>g[0]);
   return []; }
 function expandAll(){ const s=STATE.ui.screen; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]={}; groupKeys().forEach(k=>STATE.ui.exp[s][k]=true); render(); }
 function collapseAll(){ const s=STATE.ui.screen; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]={}; render(); }
@@ -586,7 +588,7 @@ function recetteStatut(p){
 }
 
 /* ---------- navigation ---------- */
-const TABS=[['accueil','Accueil'],['previsionnel','Prévisionnel'],['besoins','Besoins'],['production','Production'],['stock','Stock'],['commandes','Commandes'],['produits','Recettes'],['batches','Batches'],['articles','Articles'],['reglages','Réglages']];
+const TABS=[['accueil','Accueil'],['previsionnel','Prévisionnel'],['besoins','Besoins'],['plan','Plan'],['production','Production'],['stock','Stock'],['commandes','Commandes'],['produits','Recettes'],['batches','Batches'],['articles','Articles'],['reglages','Réglages']];
 function go(screen,extra){ const prev=STATE.ui.screen;
   if(!screenAllowed(screen)){ toast('Accès non autorisé pour votre rôle'); screen='accueil'; extra=null; }
   if(prev && prev.indexOf('edit-')===0) commitRefs(prev);
@@ -1381,6 +1383,169 @@ function explodeProduct(p,q){
   (p.emballages||[]).forEach(e=> out.emb.push({code:e.code,qte:(+e.qte||0)*q,sous_cat:e.sous_cat}));
   return out;
 }
+/* =================== MODULE PLAN (planification production) =================== */
+function planEligible(){ return STATE.produits.filter(p=>p&&p.code_pate)
+  .sort((a,b)=>(((a.categorie||'')+a.nom).localeCompare((b.categorie||'')+b.nom))); }
+function planEntry(nom){ STATE.plan=STATE.plan||{}; if(!STATE.plan[nom]||typeof STATE.plan[nom]!=='object') STATE.plan[nom]={prio:'',objectif:'',part:''}; return STATE.plan[nom]; }
+// Somme des parts (% prorata) des produits actifs, hors « exceptNom » et hors objectifs fermes.
+function planTotalPart(exceptNom){ let s=0; const pl=STATE.plan||{};
+  Object.keys(pl).forEach(k=>{ if(k===exceptNom) return; const e=pl[k]||{}; const v=+e.part;
+    if(v>0 && !(+e.objectif>0)) s+=v; }); return s; }
+
+/* --- Algorithme de simulation (exactement selon spéc) --- */
+function simulatePlan(){
+  const res={fermes:[],parts:[],goulotProrata:null,k:0,exclus:[],negs:[]};
+  try{
+    const plan=STATE.plan||{};
+    // Étape 1 — stock initial (cloné, jamais muté à la source)
+    const stock=clone(stockNow().stock||{});
+    const consoCache={};
+    const getConso=(nom)=>{ if(consoCache[nom]) return consoCache[nom];
+      const p=prodByName(nom); const m=(p?consoPerCarton(p):{})||{}; consoCache[nom]=m; return m; };
+
+    // Étape 2 — commandes fermes, par priorité croissante
+    const fermes=Object.keys(plan)
+      .filter(nom=>{ const e=plan[nom]||{}; return (+e.prio>0)&&(+e.objectif>0); })
+      .map(nom=>({nom, prio:+plan[nom].prio, objectif:+plan[nom].objectif}))
+      .sort((a,b)=>a.prio-b.prio);
+    fermes.forEach(f=>{
+      const conso=getConso(f.nom); const codes=Object.keys(conso).filter(c=>conso[c]>0);
+      let maxPoss=Infinity, goulot=null;
+      codes.forEach(c=>{ const cap=(stock[c]||0)/conso[c]; if(cap<maxPoss){ maxPoss=cap; goulot=c; } });
+      if(!codes.length) maxPoss=0;
+      const qte=Math.max(0, Math.min(f.objectif, Math.floor(maxPoss)));
+      codes.forEach(c=>{ stock[c]=(stock[c]||0)-qte*conso[c]; });
+      res.fermes.push({produit:f.nom, prio:f.prio, objectif:f.objectif, n:qte, goulot, ok:qte>=f.objectif});
+    });
+
+    // Étape 3 — prorata du reste, pondéré par tonnage matière (MP)
+    const partInfo=[];
+    Object.keys(plan)
+      .filter(nom=>{ const e=plan[nom]||{}; return (+e.prio>0)&&(+e.part>0)&&!(+e.objectif>0); })
+      .forEach(nom=>{
+        const conso=getConso(nom); let poids=0; const consoMat={};
+        Object.keys(conso).forEach(c=>{ const a=artByCode(c); if(a&&a.categorie==='Matière'&&conso[c]>0){ poids+=conso[c]; consoMat[c]=conso[c]; } });
+        let maxPoss=Infinity; Object.keys(consoMat).forEach(c=>{ const cap=(stock[c]||0)/consoMat[c]; if(cap<maxPoss) maxPoss=cap; });
+        if(poids<=0 || !isFinite(maxPoss) || maxPoss<1){ res.exclus.push(nom); return; }
+        partInfo.push({nom, part:+plan[nom].part, poids, consoMat});
+      });
+    // Coefficient pondéré par matière : coeff[c] = Σ( (part/poids) × conso[c] )
+    const coeff={};
+    partInfo.forEach(pi=>{ const w=pi.part/pi.poids; Object.keys(pi.consoMat).forEach(c=>{ coeff[c]=(coeff[c]||0)+w*pi.consoMat[c]; }); });
+    // Goulot du prorata : k = min( stock[c]/coeff[c] )
+    let k=Infinity, kGoulot=null;
+    Object.keys(coeff).forEach(c=>{ if(coeff[c]>0){ const cap=(stock[c]||0)/coeff[c]; if(cap<k){ k=cap; kGoulot=c; } } });
+    if(!isFinite(k)) k=0; k=Math.max(0, Math.floor(k));
+    res.k=k; res.goulotProrata=kGoulot;
+    // Allocation + déduction du stock
+    partInfo.forEach(pi=>{ const qte=Math.floor(k*(pi.part/pi.poids));
+      const conso=getConso(pi.nom); Object.keys(conso).forEach(c=>{ if(conso[c]>0) stock[c]=(stock[c]||0)-qte*conso[c]; });
+      res.parts.push({produit:pi.nom, part:pi.part, poids:pi.poids, n:qte, tonnage:qte*pi.poids}); });
+
+    // Étape 4 — alertes : matières en négatif
+    Object.keys(stock).forEach(c=>{ if(stock[c] < -0.001){ res.negs.push({code:c, art:artByCode(c), manque:-stock[c]}); } });
+  }catch(e){ console.warn('simulatePlan', e); }
+  return res;
+}
+function doSimulate(){
+  try{ STATE.ui.planRes=simulatePlan(); }
+  catch(e){ console.warn(e); toast('Erreur lors de la simulation'); return; }
+  STATE.ui.planTab='resultats'; render(); window.scrollTo(0,0);
+}
+function backToPlan(){ STATE.ui.planTab='saisie'; render(); window.scrollTo(0,0); }
+
+/* --- Handlers de saisie (mise à jour EN PLACE, jamais de re-render global) --- */
+function renumberPrio(nom,n){ const pl=STATE.plan||{};
+  Object.keys(pl).forEach(k=>{ if(k===nom) return; const e=pl[k]||{}; const p=+e.prio; if(e.prio!==''&&e.prio!==undefined&&p>=n) e.prio=p+1; }); }
+function refreshPlanPrios(){ const idx=STATE.ui._planIdx||{};
+  Object.keys(idx).forEach(i=>{ const nom=idx[i]; const el=document.getElementById('plprio-'+i);
+    if(el && el!==document.activeElement){ const e=(STATE.plan&&STATE.plan[nom])||{}; el.value=(e.prio!==''&&e.prio!==undefined)?e.prio:''; } }); }
+function refreshPlanDispo(){ const idx=STATE.ui._planIdx||{};
+  Object.keys(idx).forEach(i=>{ const nom=idx[i]; const el=document.getElementById('pldisp-'+i);
+    if(el) el.textContent='dispo '+nf(Math.max(0,100-planTotalPart(nom)),0)+'%'; }); }
+function refreshPlanTotals(){ const tot=planTotalPart(); const reste=100-tot; const over=tot>100;
+  const el=document.getElementById('pltotbar'); if(!el) return;
+  el.style.background=over?'#fdf1f3':'#eef4fb'; el.style.color=over?'var(--rouge)':'var(--encre)';
+  el.innerHTML='Réparti <b>'+nf(tot,0)+'%</b> · reste <b>'+nf(Math.max(0,reste),0)+'%</b>'+(over?' · <b>⚠ dépassement</b>':''); }
+function refreshPlanExclusivity(nom){ const i=(STATE.ui._planNom2idx||{})[nom];
+  if(i!==undefined){ const e=(STATE.plan&&STATE.plan[nom])||{};
+    const oEl=document.getElementById('plobj-'+i), pEl=document.getElementById('plpart-'+i);
+    if(oEl){ oEl.disabled=(+e.part>0); if(oEl!==document.activeElement) oEl.value=(e.objectif!==''&&e.objectif!==undefined)?e.objectif:''; }
+    if(pEl){ pEl.disabled=(+e.objectif>0); if(pEl!==document.activeElement) pEl.value=(e.part!==''&&e.part!==undefined)?e.part:''; } }
+  refreshPlanDispo(); refreshPlanTotals(); }
+function setPlanPrio(enc,v){ const nom=decodeURIComponent(enc); const e=planEntry(nom);
+  let n=parseInt(String(v).replace(/[^0-9]/g,''),10);
+  if(isNaN(n)||n<=0){ e.prio=''; } else { e.prio=n; renumberPrio(nom,n); refreshPlanPrios(); }
+  save(); }
+function setPlanObjectif(enc,v){ const nom=decodeURIComponent(enc); const e=planEntry(nom);
+  let n=parseFloat(String(v).replace(',','.').replace(/[^0-9.]/g,''));
+  e.objectif=(isNaN(n)||n<=0)?'':n; if(e.objectif!=='') e.part='';
+  save(); refreshPlanExclusivity(nom); }
+function setPlanPart(enc,v){ const nom=decodeURIComponent(enc); const e=planEntry(nom);
+  let n=parseFloat(String(v).replace(',','.').replace(/[^0-9.]/g,''));
+  e.part=(isNaN(n)||n<=0)?'':n; if(e.part!=='') e.objectif='';
+  save(); refreshPlanExclusivity(nom); }
+
+/* --- Vues --- */
+function viewPlan(){ if(STATE.ui.planTab==='resultats' && STATE.ui.planRes) return viewPlanResultats();
+  return viewPlanSaisie(); }
+function viewPlanSaisie(){
+  const elig=planEligible(); const idx={}, n2i={};
+  elig.forEach((p,i)=>{ idx[i]=p.nom; n2i[p.nom]=i; });
+  STATE.ui._planIdx=idx; STATE.ui._planNom2idx=n2i;
+  const itemFn=(p)=>{ const i=n2i[p.nom]; const e=(STATE.plan&&STATE.plan[p.nom])||{};
+    const prio=(e.prio!==''&&e.prio!==undefined)?e.prio:'';
+    const obj=(e.objectif!==''&&e.objectif!==undefined)?e.objectif:'';
+    const part=(e.part!==''&&e.part!==undefined)?e.part:'';
+    const enc=encodeURIComponent(p.nom); const objLocked=(+e.part>0), partLocked=(+e.objectif>0);
+    const dispo=Math.max(0,100-planTotalPart(p.nom));
+    return `<div class="lossrow">
+      <div style="font-weight:600;margin-bottom:7px">${esc(p.nom)}</div>
+      <div class="row" style="gap:8px;align-items:flex-start;flex-wrap:wrap">
+        <div class="field" style="margin:0;flex:0 0 74px"><label>Priorité</label>
+          <input id="plprio-${i}" class="num" inputmode="numeric" value="${esc(prio)}" onfocus="this.select()" oninput="setPlanPrio('${enc}',this.value)"></div>
+        <div class="field" style="margin:0;flex:1 1 116px"><label>Objectif (ferme)</label>
+          <input id="plobj-${i}" class="num" inputmode="decimal" value="${esc(obj)}" ${objLocked?'disabled':''} onfocus="this.select()" oninput="setPlanObjectif('${enc}',this.value)"></div>
+        <div class="field" style="margin:0;flex:1 1 116px"><label>Part %</label>
+          <input id="plpart-${i}" class="num" inputmode="decimal" value="${esc(part)}" ${partLocked?'disabled':''} onfocus="this.select()" oninput="setPlanPart('${enc}',this.value)">
+          <div class="muted" id="pldisp-${i}" style="margin-top:3px">dispo ${nf(dispo,0)}%</div></div>
+      </div></div>`; };
+  let body;
+  if(!elig.length) body='<div class="card"><div class="muted">Aucun produit avec une recette complète (code pâte défini). Renseignez d’abord les recettes.</div></div>';
+  else body=`<div class="card">${renderGroups(groupBy(elig,p=>p.categorie||'—'), itemFn)}</div>`;
+  const tot=planTotalPart(); const reste=100-tot; const over=tot>100;
+  return `<div class="card"><div class="muted">Pour chaque produit : une priorité (obligatoire), puis soit une quantité ferme, soit une part %.</div></div>
+    ${body}
+    <div id="pltotbar" class="card" style="text-align:center;font-size:15px;background:${over?'#fdf1f3':'#eef4fb'};color:${over?'var(--rouge)':'var(--encre)'}">Réparti <b>${nf(tot,0)}%</b> · reste <b>${nf(Math.max(0,reste),0)}%</b>${over?' · <b>⚠ dépassement</b>':''}</div>
+    <button class="btn" style="margin-top:6px;font-size:17px;padding:15px" onclick="doSimulate()">Simuler la production</button>`;
+}
+function viewPlanResultats(){
+  const R=STATE.ui.planRes||{fermes:[],parts:[],exclus:[],negs:[],goulotProrata:null};
+  const an=(c)=>{ const a=artByCode(c); return a?a.designation:(c||'—'); };
+  let fb;
+  if(!R.fermes.length) fb='<div class="muted">Aucune commande ferme (aucun objectif renseigné).</div>';
+  else fb=R.fermes.map(f=>{ const col=f.ok?'var(--vert)':'var(--rouge)';
+    return `<div class="lossrow"><div class="row spread">
+      <div><span style="color:${col};font-weight:800;font-size:16px">${f.ok?'✓':'✗'}</span> <span style="font-weight:600">${esc(f.produit)}</span></div>
+      <div class="num" style="font-weight:700">${nf(f.n,0)} u</div></div>
+      ${f.ok?'':`<div class="sub" style="color:var(--rouge);margin-top:3px">STOCK INSUFFISANT — manque ${nf(f.objectif-f.n,0)} — goulot : ${esc(an(f.goulot))}</div>`}
+    </div>`; }).join('');
+  let pb;
+  if(!R.parts.length) pb='<div class="muted">Aucun produit en prorata.</div>';
+  else { const gb=R.goulotProrata?`<div class="alert" style="background:#fdf1f3;color:var(--rouge);margin-bottom:8px"><span>⚠</span><span><b>GOULOT</b> — ${esc(an(R.goulotProrata))} <span class="sub">(la matière qui limite le partage)</span></span></div>`:'';
+    pb=gb+R.parts.map(p=>`<div class="lossrow"><div class="row spread">
+      <div style="font-weight:600">${esc(p.produit)}</div><div class="num" style="font-weight:700">${nf(p.n,0)} u</div></div>
+      <div class="sub" style="margin-top:3px">part ${nf(p.part,0)}% · ${nf(p.poids,3)} kg/carton · tonnage ≈ ${nf(p.tonnage/1000,2)} t</div></div>`).join(''); }
+  let al='';
+  if(R.exclus&&R.exclus.length) al+=`<div class="alert" style="background:#fff7e6;color:#8a5a00;margin-top:8px"><span>ℹ</span><span>Produits exclus du prorata (stock insuffisant sur une matière clé) : <b>${R.exclus.map(esc).join(', ')}</b></span></div>`;
+  if(R.negs&&R.negs.length) al+=R.negs.map(nn=>`<div class="alert" style="background:#fdf1f3;color:var(--rouge);margin-top:8px"><span>⚠</span><span><b>${esc(nn.art?nn.art.designation:nn.code)}</b> en négatif — manque ${nf(nn.manque,1)} (objectifs trop ambitieux)</span></div>`).join('');
+  return `<div class="card"><div class="csub" style="margin-top:0">Commandes fermes</div>${fb}</div>
+    <div class="card"><div class="csub" style="margin-top:0">Prorata du reste</div>${pb}</div>
+    ${al?`<div class="card">${al}</div>`:''}
+    <button class="btn sec" style="margin-top:6px" onclick="backToPlan()">← Modifier le plan</button>`;
+}
+/* =================== fin MODULE PLAN =================== */
+
 /* ---- saisie ---- */
 function newProduction(){ const eq=n=>({n,productions:[],pates:[],cremes:[]});
   const d={date:new Date().toISOString().slice(0,10),equipes:[eq(1),eq(2),eq(3)]};
@@ -1753,6 +1918,7 @@ function render(){
   if(s==='accueil') h=viewAccueil();
   else if(s==='previsionnel') h=viewPrevisionnel();
   else if(s==='besoins') h=viewBesoins();
+  else if(s==='plan') h=viewPlan();
   else if(s==='production') h=viewProduction();
   else if(s==='edit-prod') h=viewEditProd();
   else if(s==='stock') h=viewStock();
