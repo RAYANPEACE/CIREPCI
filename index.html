@@ -950,23 +950,29 @@ function capByMatiere(rows){
     m.prods.sort((a,b)=>a.cap-b.cap); m.minCap=m.prods.length?m.prods[0].cap:0; return m; });
   return list.sort((a,b)=>a.minCap-b.minCap);
 }
+// Carte compacte d'un article goulot (dans un groupe dépliable « Par matière »).
+function capMatItem(m){
+  const nom=m.art?m.art.designation:m.code;
+  const col=goulotCol(Math.floor(m.minCap));
+  const prods=(m.prods||[]).map(p=>`<div class="row spread" style="padding:4px 2px;border-bottom:1px solid var(--ligne)">
+      <span style="min-width:0">${esc(p.nom)}</span>
+      <span class="num" style="font-weight:700;white-space:nowrap;color:${goulotCol(Math.floor(p.cap))}">${nf(Math.max(0,Math.floor(p.cap)),0)} cart.</span></div>`).join('');
+  return `<div class="lossrow" style="padding:9px 2px">
+    <div class="row spread" style="gap:8px">
+      <div style="min-width:0"><div style="font-weight:700">${esc(nom)}</div>
+        <div class="sub"><span class="code">${esc(m.code)}</span> · stock ${nf(m.stock,0)}</div></div>
+      <div class="num" style="font-weight:800;padding:3px 10px;border-radius:7px;background:${col};color:#fff;white-space:nowrap">${nf(Math.max(0,Math.floor(m.minCap)),0)} cart.</div>
+    </div>
+    <div class="rosub" style="margin-top:6px">Limite ${m.prods.length} produit(s)</div>
+    ${prods}
+  </div>`;
+}
 function viewCapaciteParMatiere(rows){
   const list=capByMatiere(rows);
   if(!list.length) return '<div class="muted" style="padding:14px">Aucun article limitant pour le moment.</div>';
-  return list.map(m=>{ const nom=m.art?m.art.designation:m.code;
-    const col=goulotCol(Math.floor(m.minCap));
-    const prods=m.prods.map(p=>`<div class="row spread" style="padding:5px 2px;border-bottom:1px solid var(--ligne)">
-        <span style="min-width:0">${esc(p.nom)}</span>
-        <span class="num" style="font-weight:700;white-space:nowrap;color:${goulotCol(Math.floor(p.cap))}">${nf(Math.max(0,Math.floor(p.cap)),0)} cart.</span></div>`).join('');
-    return `<div class="card">
-      <div class="row spread" style="gap:8px">
-        <div style="min-width:0"><div style="font-weight:700">${esc(nom)}</div>
-          <div class="sub"><span class="code">${esc(m.code)}</span> · stock ${nf(m.stock,0)}</div></div>
-        <div class="num" style="font-weight:800;padding:3px 10px;border-radius:7px;background:${col};color:#fff;white-space:nowrap">${nf(Math.max(0,Math.floor(m.minCap)),0)} cart.</div>
-      </div>
-      <div class="rosub" style="margin-top:8px">Limite ${m.prods.length} produit(s)</div>
-      ${prods}
-    </div>`; }).join('');
+  // Catégorisation Matière/Emballage + sous-catégories (triées par capacité croissante à l'intérieur).
+  list.forEach(m=>{ m.categorie=m.art?m.art.categorie:''; m.sous_categorie=m.art?m.art.sous_categorie:''; });
+  return grpBar()+`<div class="card" style="padding:4px 12px">${renderGroupsMPEmb(list, capMatItem)}</div>`;
 }
 function viewCapacite(){
   let G; try{ G=computeGoulots(); }catch(e){ G={rows:[], ref:''}; }
