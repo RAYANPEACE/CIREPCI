@@ -552,18 +552,23 @@ function toggleGrp(h){ const wrap=h.parentNode; const items=wrap.querySelector('
   h.querySelector('.gchev').textContent = willExpand?'▾':'▸';
   if(willExpand) scrollCardIntoView(h);
 }
-function groupKeys(){ const s=STATE.ui.screen;
-  if(s==='articles') return groupBy(STATE.articles,a=>a.sous_categorie||a.categorie).map(g=>g[0]);
-  if(s==='batches') return groupBy(STATE.batches,b=>b.type).map(g=>g[0]);
-  if(s==='produits') return groupBy(STATE.produits,p=>p.categorie).map(g=>g[0]);
-  if(s==='stock'||s==='edit-inv') return groupBy(STATE.articles,a=>a.sous_categorie||a.categorie).map(g=>g[0]);
-  if(s==='commandes') return ['Ouverte','Partielle','Clôturée'];
-  return []; }
-function expandAll(){ const s=STATE.ui.screen; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]={}; groupKeys().forEach(k=>STATE.ui.exp[s][k]=true); render(); }
-function collapseAll(){ const s=STATE.ui.screen; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]={}; render(); }
-function grpBar(){ return `<div class="stickybar"><div class="row" style="gap:8px">
-  <button class="btn sm ghost" onclick="expandAll()">Tout déplier</button>
-  <button class="btn sm ghost" onclick="collapseAll()">Tout replier</button></div></div>`; }
+// Déplie/replie toutes les sections de l'écran VISIBLE, en place (sans re-render global) :
+// met à jour le DOM et les flags STATE.ui.exp pour conserver l'état au prochain rendu.
+function setAllGroups(expand){
+  const s=STATE.ui.screen; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]=STATE.ui.exp[s]||{};
+  const view=document.getElementById('view'); if(!view) return;
+  view.querySelectorAll('.grpwrap').forEach(w=>{
+    const items=w.querySelector('.grpitems'), chev=w.querySelector('.gchev'), key=w.dataset.key;
+    if(items) items.style.display = expand?'':'none';
+    if(chev) chev.textContent = expand?'▾':'▸';
+    if(key) STATE.ui.exp[s][key]=expand;
+  });
+}
+function expandAll(){ setAllGroups(true); }
+function collapseAll(){ setAllGroups(false); }
+function grpBar(){ return `<div class="stickybar"><div class="row" style="gap:8px;justify-content:flex-end">
+  <button class="btn sm ghost" onclick="expandAll()">▼ Tout déplier</button>
+  <button class="btn sm ghost" onclick="collapseAll()">▲ Tout replier</button></div></div>`; }
 function scrollCardIntoView(el){ if(!el) return; const hd=document.querySelector('header'); const hh=hd?hd.offsetHeight:0;
   const y=el.getBoundingClientRect().top + window.pageYOffset - hh - 8; window.scrollTo({top:y, behavior:'smooth'}); }
 function isBlankBatch(b){ return !b.code && poidsStd(b)===0; }
