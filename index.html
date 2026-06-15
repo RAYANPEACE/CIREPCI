@@ -358,12 +358,13 @@ function scheduleSync(){ if(!sbClient || !navigator.onLine || !sbOnline) return;
 async function pushAllToSupabase(){
   if(!sbClient || !sbOnline) return {offline:true, failed:[]};
   ensureIds(); const failed=[];
+  const errMsg=e=>{ try{ return (e&&(e.message||e.hint||e.details))||JSON.stringify(e); }catch(_){ return String(e); } };
   for(const t of SB_TABLES){
     try{ const cur=mapRows(t); const ups=Object.keys(cur).map(k=>JSON.parse(cur[k]));
       if(ups.length){ const {error}=await sbClient.from(t.n).upsert(ups,{onConflict:t.k}); if(error) throw error; }
-    }catch(e){ console.warn('Push '+t.n, e); failed.push(t.n); }
+    }catch(e){ console.warn('Push '+t.n, e); failed.push({n:t.n, msg:errMsg(e)}); }
   }
-  try{ await syncParametres(); }catch(e){ console.warn('Push parametres', e); failed.push('parametres'); }
+  try{ await syncParametres(); }catch(e){ console.warn('Push parametres', e); failed.push({n:'parametres', msg:errMsg(e)}); }
   snapshot(); // resynchronise l'état de référence pour les diffs ultérieurs
   return {offline:false, failed};
 }
@@ -2213,7 +2214,7 @@ function doImport(inp){ const f=inp.files[0]; if(!f)return; const r=new FileRead
       let msg='Sauvegarde restaurée';
       try{ const res=await pushAllToSupabase();
         if(res.offline){ msg='Restauré localement. Reconnectez-vous puis ré-importez pour synchroniser le cloud.'; }
-        else if(res.failed.length){ alert('Restauré localement, mais la synchronisation cloud a échoué pour : '+res.failed.join(', ')+'.\nCes données risquent d\'être écrasées au prochain chargement. Vérifiez la connexion et les tables Supabase, puis ré-importez.'); }
+        else if(res.failed.length){ alert('Restauré localement, mais la synchronisation cloud a échoué pour :\n'+res.failed.map(f=>'• '+f.n+' : '+f.msg).join('\n')+'\n\nCes données risquent d\'être écrasées au prochain chargement. NE rechargez PAS la page ; corrigez les tables Supabase puis ré-importez.'); }
         else { msg='Sauvegarde restaurée et synchronisée ('+(STATE.batches.length)+' batches)'; }
       }catch(e){ console.warn('Import push', e); }
       go('accueil'); toast(msg);
