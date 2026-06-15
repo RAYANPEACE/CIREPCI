@@ -1996,9 +1996,12 @@ function viewEditProd(){ const d=STATE.ui.editObj; if(!d) return '<div class="mu
     const hasProd=(e.productions||[]).some(it=>it.produit);
     const declaHint='<div class="hint" style="margin-bottom:8px">Déduites automatiquement des produits ci-dessus.</div>';
     const noDecla=hasProd?'':'<div class="muted" style="margin-bottom:6px">Ajoutez des produits : les pâtes et crèmes consommées apparaîtront ici.</div>';
+    // Produits saisis sans pâte ni crème dans leur recette : rien à déclarer (recette incomplète).
+    const sansRec=(e.productions||[]).map(it=>prodByName(it.produit)).filter(p=>p&&!p.code_pate&&!p.code_creme&&!p.code_creme_2).map(p=>p.nom);
+    const noteRec=sansRec.length?`<div class="hint" style="background:#fff7e6;color:#8a5a00;padding:7px 9px;border-radius:8px;margin:6px 0 0">⚠ Sans pâte ni crème dans leur recette (rien à déclarer) : <b>${sansRec.map(esc).join(', ')}</b>. Complétez la recette dans l'onglet Recettes.</div>`:'';
     return `<div class="card"><h2 style="margin-bottom:2px">Équipe ${e.n}</h2>
       <div class="seclabel prod">Produits fabriqués</div>${(e.productions||[]).map(prodItem).join('')||'<div class="muted" style="margin-bottom:8px">Aucun produit.</div>'}
-      <button class="btn sm sec" onclick="addProd(${ei},'productions')">+ Produit</button>
+      <button class="btn sm sec" onclick="addProd(${ei},'productions')">+ Produit</button>${noteRec}
       <div class="seclabel pate">Pâtes déclarées</div>${(e.pates||[]).length?declaHint+(e.pates).map((b,i)=>batItem('pates',b,i)).join(''):noDecla}
       <div class="seclabel creme">Crèmes déclarées</div>${(e.cremes||[]).length?declaHint+(e.cremes).map((b,i)=>batItem('cremes',b,i)).join(''):noDecla}
     </div>`; };
