@@ -107,6 +107,14 @@ table.pgrid{border-collapse:separate;border-spacing:0;font-size:14px}
 .pgrid-dash td:not(.pname):not(.pcatname):not(.pcatfill){text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums;font-size:12.5px}
 .albadge{display:inline-block;padding:2px 7px;border-radius:6px;color:#fff;font-size:10.5px;font-weight:700;white-space:nowrap}
 .alert{border-radius:12px}
+.field input.err,.field input.err:focus{border-color:var(--rouge);background:#fdf1f3}
+.fdup{color:var(--rouge);font-size:12px;font-weight:600;margin-top:4px}
+.stockbox{display:inline-block;min-width:48px;text-align:right;padding:2px 7px;border-radius:6px;font-weight:700;font-variant-numeric:tabular-nums;font-size:12px}
+.stockbox.at{background:#e7eff8;color:var(--acier-d);border:1px solid #c9dbf0}
+.stockbox.de{background:#e9f5ee;color:var(--vert);border:1px solid #c8e6d4}
+@media (min-width:900px){
+  main:has(.gridwrap){max-width:min(96vw,1400px)}
+}
 .ok-big{padding:16px;text-align:center;color:var(--vert);font-weight:700}
 .crow .lbl,.lbl{font-size:11px;color:var(--gris);font-weight:600}
 .crow .lbl{flex:0 0 auto}
@@ -418,11 +426,46 @@ function stockNow(){ const {map,dateA,dateD}=currentStock();
   return {stock:s, ref}; }
 function computeGoulots(){ const {stock,ref}=stockNow();
   const rows=STATE.produits.map(p=>{ const m=consoPerCarton(p); const codes=Object.keys(m).filter(c=>m[c]>0);
-    if(!codes.length) return null; let min=Infinity, lim=null;
-    codes.forEach(c=>{ const cap=(stock[c]||0)/m[c]; if(cap<min){ min=cap; lim=c; } });
-    return {nom:p.nom, cat:p.categorie||'—', maxCartons:Math.max(0,Math.floor(min)), limCode:lim, limArt:artByCode(lim), stockLim:Math.max(0,stock[lim]||0), besoinLim:m[lim]}; })
+    if(!codes.length) return null;
+    const details=codes.map(c=>({code:c, art:artByCode(c), besoin:m[c], stock:Math.max(0,stock[c]||0), cap:Math.max(0,stock[c]||0)/m[c]}))
+      .sort((a,b)=>a.cap-b.cap);
+    const lim=details[0];
+    return {nom:p.nom, cat:p.categorie||'—', maxCartons:Math.max(0,Math.floor(lim.cap)), limCode:lim.code, limArt:lim.art, stockLim:lim.stock, besoinLim:lim.besoin, details}; })
     .filter(Boolean).sort((a,b)=>a.maxCartons-b.maxCartons);
   return {rows, ref}; }
+function viewGoulotProduit(g){
+  const key='goulot-det-'+g.nom; const ex=isExpanded(key);
+  const col=g.maxCartons<=0?'var(--rouge)':(g.maxCartons<200?'#b8791f':'var(--vert)');
+  const matieres=g.details.map(d=>{ const nom=d.art?d.art.designation:d.code; const isLim=d.code===g.limCode;
+    return `<div class="row spread" style="padding:5px 2px;border-bottom:1px solid var(--ligne)${isLim?';background:#fbecef':''}">
+      <div><div style="font-weight:600;font-size:13px${isLim?';color:var(--rouge)':''}">${esc(nom)}</div><div class="sub">${nf(d.besoin,3)}/u · stock ${nf(d.stock,0)}</div></div>
+      <div class="num" style="font-weight:700">≈ ${nf(d.cap,0)} u</div></div>`; }).join('');
+  return `<div class="grpwrap" data-key="${esc(key)}">
+    <div class="lossrow">
+      <div class="row spread">
+        <div style="font-weight:600">${esc(g.nom)}</div>
+        <div class="num" style="font-weight:800;padding:3px 10px;border-radius:7px;background:${col};color:#fff">${nf(g.maxCartons,0)} unités</div>
+      </div>
+      <div class="row spread" style="margin-top:4px">
+        <span class="albadge" style="background:var(--rouge)">GOULOT</span>
+        <span class="sub">${esc(g.limArt?g.limArt.designation:(g.limCode||'—'))}</span>
+      </div>
+      <div class="grp" style="margin:6px -2px -2px;padding:6px 2px 2px;border:0;background:transparent" onclick="toggleGrp(this.parentNode.parentNode)">
+        <span class="gchev">${ex?'▾':'▸'}</span> Détail des matières
+      </div>
+    </div>
+    <div class="grpitems" style="${ex?'':'display:none'}">${matieres}</div>
+  </div>`;
+}
+function renderGoulotGroups(rows){
+  const groups=groupBy(rows, r=>r.cat);
+  return groups.map(([k,arr])=>{ const key='goulot-cat-'+k; const ex=isExpanded(key);
+    const catMin=Math.min(...arr.map(r=>r.maxCartons));
+    return `<div class="grpwrap" data-key="${esc(key)}">
+      <div class="grp" onclick="toggleGrp(this)"><span class="gchev">${ex?'▾':'▸'}</span>${esc(k)} · ${arr.length} · goulot ${nf(catMin,0)} cart.</div>
+      <div class="grpitems" style="${ex?'':'display:none'}">${arr.map(viewGoulotProduit).join('')}</div>
+    </div>`; }).join('');
+}
 function viewAccueil(){
   const cur=new Date().getFullYear();
   const today=new Date().toISOString().slice(0,10);
@@ -430,7 +473,7 @@ function viewAccueil(){
   const sev={'RUPTURE':5,'COMMANDER URGENT':4,'COMMANDER (insuffisant)':3,'Rupture temporaire':2};
   al.sort((a,b)=>(sev[b.alerte]||0)-(sev[a.alerte]||0)||((a.phys.jours==null?1e9:a.phys.jours)-(b.phys.jours==null?1e9:b.phys.jours)));
   const nRup=al.filter(r=>r.alerte==='RUPTURE').length;
-  const G=computeGoulots(); const gtop=G.rows.slice(0,6);
+  const G=computeGoulots();
   let cOuv=0,cPart=0,cRet=0; STATE.commandes.forEach(c=>{ const st=cmdStatut(c); if(st==='Ouverte')cOuv++; else if(st==='Partielle')cPart++; if(st!=='Cl\u00f4tur\u00e9e'&&c.date_estimee&&c.date_estimee<today)cRet++; });
   let vers=prevVersions(cur); const bud=vers.find(v=>/^Budget/i.test(v))||vers[vers.length-1];
   let tauxReal=null,realC=0,prevC=0; if(bud){ const B=computeBudgetReel(cur,bud,1,12); realC=B.totR; prevC=B.totP; tauxReal=B.totP>0?B.totR/B.totP*100:null; }
@@ -457,10 +500,9 @@ function viewAccueil(){
   const cardAppro=`<div class="card" onclick="go('besoins')" style="cursor:pointer"><h2>Approvisionnement${al.length?' \u00b7 '+al.length:''}${nRup?' \u00b7 '+nRup+' rupture(s)':''}</h2>${alCard}</div>`;
 
   let gCard;
-  if(!gtop.length) gCard='<div class="muted">Renseignez les recettes et un inventaire pour estimer la capacit\u00e9.</div>';
-  else gCard=gtop.map(g=>`<div class="lossrow"><div class="row spread"><div style="font-weight:600">${esc(g.nom)}</div><div class="num" style="font-weight:700;color:${g.maxCartons<=0?'var(--rouge)':(g.maxCartons<200?'#b8791f':'var(--encre)')}">${nf(g.maxCartons,0)} cart.</div></div>
-    <div class="sub">limit\u00e9 par ${esc(g.limArt?g.limArt.designation:(g.limCode||'\u2014'))} \u00b7 stock ${nf(g.stockLim,0)}</div></div>`).join('');
-  const cardGoulots=`<div class="card"><h2>Capacit\u00e9 de production \u2014 goulots</h2><div class="hint" style="margin-bottom:8px">Cartons encore fabricables avec le stock actuel estim\u00e9 (dernier inventaire + entr\u00e9es \u2212 sorties). Du plus contraint au moins contraint.</div>${gCard}</div>`;
+  if(!G.rows.length) gCard='<div class="muted">Renseignez les recettes et un inventaire pour estimer la capacit\u00e9.</div>';
+  else gCard=renderGoulotGroups(G.rows);
+  const cardGoulots=`<div class="card"><h2>Capacit\u00e9 de production \u2014 goulots</h2><div class="hint" style="margin-bottom:8px">Cartons encore fabricables avec le stock actuel estim\u00e9 (dernier inventaire + entr\u00e9es \u2212 sorties), par cat\u00e9gorie. Le goulot indique la mati\u00e8re la plus limitante.</div>${gCard}</div>`;
 
   const cardCmd=`<div class="card" onclick="go('commandes')" style="cursor:pointer"><h2>Commandes</h2>
     <div class="row" style="gap:18px;flex-wrap:wrap">
@@ -834,7 +876,7 @@ function viewStock(){ const {map,dateA,dateD}=currentStock();
     return `<div class="item" data-s="${(a.designation+' '+a.code).toLowerCase()}">
       <div class="t"><div class="nm">${a.designation}</div><div class="sub"><span class="code">${a.code}</span></div></div>
       <div style="text-align:right"><div class="num" style="font-weight:700">${nf(tot,0)}</div>
-        <div class="sub" style="white-space:nowrap">At ${nf(s.atelier,0)} · Dé ${nf(s.depot,0)}</div></div></div>`; };
+        <div class="sub" style="white-space:nowrap;margin-top:4px"><span class="stockbox at">At ${nf(s.atelier,0)}</span> <span class="stockbox de">Dé ${nf(s.depot,0)}</span></div></div></div>`; };
   return `<div class="card">
     <div class="muted" style="margin-bottom:8px">Dernier inventaire — Atelier : ${dateA||'—'} · Dépôt : ${dateD||'—'}</div>
     <div class="row" style="gap:8px"><button class="btn sm sec" onclick="newInventaire('Atelier')">Inventaire Atelier</button>
@@ -1369,7 +1411,24 @@ function viewReglages(){ const pm=STATE.parametres||{};
 }
 function setParam(k,v){ STATE.parametres[k]=parseFloat(String(v).replace(',','.'))||0; save(); }
 function setJO(i,v){ STATE.jours_ouvres[i]=parseFloat(String(v).replace(',','.'))||0; save(); }
-function newFourn(){ const f={id:'F'+String(STATE.fournisseurs.length+1).padStart(3,'0'),nom:'',contact:'',delai_moyen_jours:30};
+function fournDup(field,val,self){ val=(val||'').trim().toLowerCase(); if(!val) return false;
+  return STATE.fournisseurs.some(x=>x!==self && (x[field]||'').trim().toLowerCase()===val); }
+function nextFournId(){ let n=STATE.fournisseurs.length+1; let id;
+  do{ id='F'+String(n).padStart(3,'0'); n++; }while(STATE.fournisseurs.some(f=>f.id===id));
+  return id; }
+function fournFocus(input){ input.dataset.prev=input.value; input.select(); }
+function fournInput(input,field){ const f=STATE.ui.editObj; f[field]=input.value;
+  input.classList.toggle('err', fournDup(field,input.value,f));
+  const hint=document.getElementById('fdup-'+field); if(hint) hint.style.display = input.classList.contains('err')?'block':'none';
+  save(); }
+function fournBlur(input,field){ const f=STATE.ui.editObj; const v=field==='id'?input.value.trim():input.value;
+  if(fournDup(field,v,f)){
+    toast(field==='id'?'Ce code fournisseur existe déjà':'Ce nom de fournisseur existe déjà');
+    const prev=input.dataset.prev||''; f[field]=prev; input.value=prev; input.classList.remove('err');
+    const hint=document.getElementById('fdup-'+field); if(hint) hint.style.display='none';
+  } else { f[field]=v; input.value=v; }
+  save(); }
+function newFourn(){ const f={id:nextFournId(),nom:'',contact:'',delai_moyen_jours:30};
   STATE.fournisseurs.push(f); STATE.ui.editObj=f; go('edit-fourn'); }
 function editFourn(id){ STATE.ui.editObj=STATE.fournisseurs.find(f=>f.id===id); go('edit-fourn'); }
 function viewEditFourn(){ const f=STATE.ui.editObj; if(!f) return '<div class="muted">Introuvable.</div>';
@@ -1382,8 +1441,10 @@ function viewEditFourn(){ const f=STATE.ui.editObj; if(!f) return '<div class="m
         <button class="x" onclick="rmFA(${gi})">×</button></div></div>`; }).join('');
   return `<button class="back" onclick="go('reglages')">‹ Réglages</button>
   <div class="card">
-    <div class="field"><label>Code fournisseur</label><input value="${esc(f.id)}" oninput="STATE.ui.editObj.id=this.value;save()"></div>
-    <div class="field"><label>Nom</label><input value="${esc(f.nom)}" oninput="STATE.ui.editObj.nom=this.value;save()" onfocus="this.select()"></div>
+    <div class="field"><label>Code fournisseur</label><input value="${esc(f.id)}" onfocus="fournFocus(this)" oninput="fournInput(this,'id')" onblur="fournBlur(this,'id')">
+      <div class="fdup" id="fdup-id" style="display:none">Ce code fournisseur existe déjà.</div></div>
+    <div class="field"><label>Nom</label><input value="${esc(f.nom)}" onfocus="fournFocus(this)" oninput="fournInput(this,'nom')" onblur="fournBlur(this,'nom')">
+      <div class="fdup" id="fdup-nom" style="display:none">Ce nom de fournisseur existe déjà.</div></div>
     <div class="grid2">
       <div class="field"><label>Contact</label><input value="${esc(f.contact||'')}" oninput="STATE.ui.editObj.contact=this.value;save()"></div>
       <div class="field" style="margin-bottom:0"><label>Délai moyen (j)</label><input class="num" inputmode="numeric" value="${f.delai_moyen_jours}" oninput="STATE.ui.editObj.delai_moyen_jours=parseFloat(this.value)||0;save()" onfocus="this.select()"></div>
