@@ -941,10 +941,12 @@ function viewCapaciteParProduit(rows){
     </div>`; }).join('')+`</div>`;
 }
 // Regroupe les goulots (MP + EMB) par article : quels produits il limite et à quelle capacité.
+// Index inversé : pour CHAQUE article consommé (toutes les matières, pas seulement
+// les goulots), liste les produits qui l'utilisent et la capacité permise.
+// minCap = capacité du produit le plus contraint par cet article (cas le plus critique).
 function capByMatiere(rows){
   const map={};
-  rows.forEach(g=>{ const sp=goulotSplit(g);
-    [sp.mp, sp.emb].forEach(d=>{ if(!d) return;
+  rows.forEach(g=>{ (g.details||[]).forEach(d=>{ if(!(d.besoin>0)) return;
       const m=map[d.code]||(map[d.code]={code:d.code, art:d.art, stock:d.stock, prods:[]});
       m.prods.push({nom:g.nom, cap:d.cap}); }); });
   const list=Object.keys(map).map(c=>{ const m=map[c];
@@ -964,7 +966,7 @@ function capMatItem(m){
         <div class="sub"><span class="code">${esc(m.code)}</span> · stock ${nf(m.stock,0)}</div></div>
       <div class="num" style="font-weight:800;padding:3px 10px;border-radius:7px;background:${col};color:#fff;white-space:nowrap">${nf(Math.max(0,Math.floor(m.minCap)),0)} cart.</div>
     </div>
-    <div class="rosub" style="margin-top:6px">Limite ${m.prods.length} produit(s)</div>
+    <div class="rosub" style="margin-top:6px">Utilisé par ${m.prods.length} produit(s)</div>
     ${prods}
   </div>`;
 }
