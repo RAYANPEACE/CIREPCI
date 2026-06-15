@@ -344,6 +344,21 @@ async function syncToSupabase(){
 }
 function scheduleSync(){ if(!sbClient || !navigator.onLine || !sbOnline) return;
   clearTimeout(_syncT); _syncT=setTimeout(syncToSupabase, 700); }
+// Pousse TOUTES les données locales vers Supabase (upsert complet, sans suppression).
+// Utilisé après une restauration : le cloud étant la source de vérité à la connexion,
+// la sauvegarde doit y être écrite immédiatement sinon elle sera écrasée au rechargement.
+async function pushAllToSupabase(){
+  if(!sbClient || !sbOnline) return {offline:true, failed:[]};
+  ensureIds(); const failed=[];
+  for(const t of SB_TABLES){
+    try{ const cur=mapRows(t); const ups=Object.keys(cur).map(k=>JSON.parse(cur[k]));
+      if(ups.length){ const {error}=await sbClient.from(t.n).upsert(ups,{onConflict:t.k}); if(error) throw error; }
+    }catch(e){ console.warn('Push '+t.n, e); failed.push(t.n); }
+  }
+  try{ await syncParametres(); }catch(e){ console.warn('Push parametres', e); failed.push('parametres'); }
+  snapshot(); // resynchronise l'état de référence pour les diffs ultérieurs
+  return {offline:false, failed};
+}
 
 /* ---------- Migration unique des données locales vers Supabase ---------- */
 function migDone(){ try{ return localStorage.getItem(MIGRATION_DONE_KEY)||''; }catch(e){ return ''; } }
@@ -2126,7 +2141,7 @@ async function doExport(){
   }catch(e){ toast('Export impossible'); }
 }
 function doImport(inp){ const f=inp.files[0]; if(!f)return; const r=new FileReader();
-  r.onload=()=>{ try{ const o=JSON.parse(r.result);
+  r.onload=async ()=>{ try{ const o=JSON.parse(r.result);
       if(o.type!=='cirepci-recettes-backup'||!o.data) { alert('Fichier non reconnu.'); return; }
       if(!confirm('Remplacer toutes les données actuelles par cette sauvegarde ?')) return;
       const d=o.data; STATE.articles=d.articles||[]; STATE.batches=d.batches||[]; STATE.produits=d.produits||[];
@@ -2134,7 +2149,16 @@ function doImport(inp){ const f=inp.files[0]; if(!f)return; const r=new FileRead
       STATE.commandes=d.commandes||[]; STATE.fournisseurs=d.fournisseurs||[]; STATE.fournisseur_article=d.fournisseur_article||[];
       STATE.production=d.production||[];
       STATE.parametres=d.parametres||clone(SEED.parametres); STATE.jours_ouvres=d.jours_ouvres||clone(SEED.jours_ouvres);
-      migrate(); buildLists(); save(); go('accueil'); toast('Sauvegarde restaurée');
+      migrate(); buildLists(); cacheLocal();
+      // Restauration durable : écrire tout de suite dans le cloud (source de vérité au login),
+      // sinon le rechargement suivant écraserait la restauration.
+      let msg='Sauvegarde restaurée';
+      try{ const res=await pushAllToSupabase();
+        if(res.offline){ msg='Restauré localement. Reconnectez-vous puis ré-importez pour synchroniser le cloud.'; }
+        else if(res.failed.length){ alert('Restauré localement, mais la synchronisation cloud a échoué pour : '+res.failed.join(', ')+'.\nCes données risquent d\'être écrasées au prochain chargement. Vérifiez la connexion et les tables Supabase, puis ré-importez.'); }
+        else { msg='Sauvegarde restaurée et synchronisée ('+(STATE.batches.length)+' batches)'; }
+      }catch(e){ console.warn('Import push', e); }
+      go('accueil'); toast(msg);
     }catch(e){ alert('Fichier illisible.'); } };
   r.readAsText(f); inp.value='';
 }
