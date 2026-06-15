@@ -801,15 +801,28 @@ function goulotSplit(g){
 }
 // Rouge si < 100 cartons, orange si < 300, vert sinon.
 function goulotCol(n){ return n==null?'var(--gris)':(n<100?'var(--rouge)':(n<300?'#b8791f':'var(--vert)')); }
+// Couleurs FIXES pour distinguer matières premières / emballages (indépendamment de la valeur).
+const MP_COL='#1b5faa';   // bleu acier
+const EMB_COL='#7a4fb0';  // violet — distinct des couleurs de criticité
+// Capacité réelle = la plus petite des deux (MP, EMB) : c'est elle qui limite vraiment.
+function goulotMax(sp){ const a=(sp&&sp.mp)?sp.mp.cap:null, b=(sp&&sp.emb)?sp.emb.cap:null;
+  if(a==null&&b==null) return null; if(a==null) return b; if(b==null) return a; return Math.min(a,b); }
+// Couleur fluo de criticité pour la valeur MAX mise en avant.
+function goulotFluo(n){ return n==null?'#9aa3ad':(n<100?'#ff4d4d':(n<300?'#ffb000':'#39ff14')); }
+function maxBadge(n){ const c=goulotFluo(n);
+  return `<span class="num" style="font-weight:900;background:#0b0f12;color:${c};padding:3px 11px;border-radius:7px;white-space:nowrap;letter-spacing:.4px;text-shadow:0 0 6px ${c}">MAX ${n==null?'—':nf(n,0)}</span>`; }
 function viewGoulotProduit(g){
-  const sp=goulotSplit(g);
-  const line=(label,d)=>{ if(!d) return `<div class="sub" style="padding:1px 0">${label} : —</div>`;
+  const sp=goulotSplit(g); const mx=goulotMax(sp);
+  const line=(label,d,col)=>{ if(!d) return `<div class="sub" style="padding:1px 0">${label} : —</div>`;
     const n=Math.max(0,Math.floor(d.cap)); const nom=d.art?d.art.designation:d.code;
-    return `<div class="sub" style="padding:1px 0"><b style="color:${goulotCol(n)}">${label} : ${nf(n,0)} cartons</b> · goulot : ${esc(nom)}</div>`; };
+    return `<div class="sub" style="padding:1px 0"><b style="color:${col}">${label} : ${nf(n,0)} cartons</b> · goulot : ${esc(nom)}</div>`; };
   return `<div class="lossrow">
-    <div style="font-weight:600;margin-bottom:2px">${esc(g.nom)}</div>
-    ${line('MP', sp.mp)}
-    ${line('EMB', sp.emb)}
+    <div class="row spread" style="gap:8px;margin-bottom:3px">
+      <div style="font-weight:600;min-width:0">${esc(g.nom)}</div>
+      ${maxBadge(mx==null?null:Math.max(0,Math.floor(mx)))}
+    </div>
+    ${line('MP', sp.mp, MP_COL)}
+    ${line('EMB', sp.emb, EMB_COL)}
   </div>`;
 }
 function renderGoulotGroups(rows){
@@ -864,12 +877,13 @@ function viewCapaciteProduit(g){
   const embN = sp.emb?Math.max(0,Math.floor(sp.emb.cap)):null;
   const det=g.details||[];
   const mpDet=det.filter(isMP), embDet=det.filter(d=>!isMP(d));
-  const sum=(lbl,n)=>`<span class="sub" style="white-space:nowrap"><b style="color:${goulotCol(n)}">${lbl} ${n==null?'—':nf(n,0)}</b></span>`;
+  const mx=goulotMax(sp);
+  const sum=(lbl,n,col)=>`<span class="sub" style="white-space:nowrap"><b style="color:${col}">${lbl} ${n==null?'—':nf(n,0)}</b></span>`;
   return `<div class="grpwrap" data-key="${esc(key)}">
     <div class="grp" style="text-transform:none;font-size:13px;letter-spacing:0;color:var(--encre)" onclick="toggleGrp(this)">
       <div class="row spread" style="gap:8px;width:100%">
         <span><span class="gchev">${ex?'▾':'▸'}</span> ${esc(g.nom)}</span>
-        <span class="row" style="gap:10px">${sum('MP',mpN)}${sum('EMB',embN)}</span>
+        <span class="row" style="gap:8px;align-items:center">${maxBadge(mx==null?null:Math.max(0,Math.floor(mx)))}${sum('MP',mpN,MP_COL)}${sum('EMB',embN,EMB_COL)}</span>
       </div>
     </div>
     <div class="grpitems" style="${ex?'':'display:none'};padding:8px 4px 2px">
@@ -1752,9 +1766,24 @@ function setPlanPart(enc,v){ const nom=decodeURIComponent(enc); const e=planEntr
 /* --- Vues --- */
 function viewPlan(){ if(STATE.ui.planTab==='resultats' && STATE.ui.planRes) return viewPlanResultats();
   return viewPlanSaisie(); }
+// Produits explicitement ajoutés au plan (parmi les produits éligibles existants).
+function planProducts(){ const pl=STATE.plan||{};
+  return planEligible().filter(p=> pl[p.nom] && typeof pl[p.nom]==='object'); }
+// Options du menu « Ajouter », regroupées/triées par catégorie, sans les produits déjà au plan.
+function planAddOptions(){
+  const inPlan=new Set(Object.keys(STATE.plan||{}));
+  const avail=planEligible().filter(p=>!inPlan.has(p.nom));
+  if(!avail.length) return '';
+  return groupBy(avail, p=>p.categorie||'—').map(([k,arr])=>
+    `<optgroup label="${esc(k)}">`+arr.map(p=>`<option value="${esc(encodeURIComponent(p.nom))}">${esc(p.nom)}</option>`).join('')+'</optgroup>').join('');
+}
+function addPlanProduct(enc){ if(!enc) return; const nom=decodeURIComponent(enc);
+  planEntry(nom); save(); render(); }
+function removePlanProduct(enc){ const nom=decodeURIComponent(enc);
+  if(STATE.plan && STATE.plan[nom]!==undefined) delete STATE.plan[nom]; save(); render(); }
 function viewPlanSaisie(){
-  const elig=planEligible(); const idx={}, n2i={};
-  elig.forEach((p,i)=>{ idx[i]=p.nom; n2i[p.nom]=i; });
+  const list=planProducts(); const idx={}, n2i={};
+  list.forEach((p,i)=>{ idx[i]=p.nom; n2i[p.nom]=i; });
   STATE.ui._planIdx=idx; STATE.ui._planNom2idx=n2i;
   const itemFn=(p)=>{ const i=n2i[p.nom]; const e=(STATE.plan&&STATE.plan[p.nom])||{};
     const prio=(e.prio!==''&&e.prio!==undefined)?e.prio:'';
@@ -1763,7 +1792,10 @@ function viewPlanSaisie(){
     const enc=encodeURIComponent(p.nom); const objLocked=(+e.part>0), partLocked=(+e.objectif>0);
     const dispo=Math.max(0,100-planTotalPart(p.nom));
     return `<div class="lossrow">
-      <div style="font-weight:600;margin-bottom:7px">${esc(p.nom)}</div>
+      <div class="row spread" style="gap:8px;margin-bottom:7px">
+        <div style="font-weight:600;min-width:0">${esc(p.nom)} <span class="tag">${esc(p.categorie||'—')}</span></div>
+        <button class="btn sm ghost" style="flex:0 0 auto;padding:6px 11px" onclick="removePlanProduct('${enc}')" title="Retirer du plan">✕</button>
+      </div>
       <div class="row" style="gap:8px;align-items:flex-start;flex-wrap:wrap">
         <div class="field" style="margin:0;flex:0 0 74px"><label>Priorité</label>
           <input id="plprio-${i}" class="num" inputmode="numeric" value="${esc(prio)}" onfocus="this.select()" oninput="setPlanPrio('${enc}',this.value)"></div>
@@ -1773,12 +1805,18 @@ function viewPlanSaisie(){
           <input id="plpart-${i}" class="num" inputmode="decimal" value="${esc(part)}" ${partLocked?'disabled':''} onfocus="this.select()" oninput="setPlanPart('${enc}',this.value)">
           <div class="muted" id="pldisp-${i}" style="margin-top:3px">dispo ${nf(dispo,0)}%</div></div>
       </div></div>`; };
+  const addOpts=planAddOptions();
+  const addCard=`<div class="card"><div class="field" style="margin:0"><label>Ajouter un produit au plan</label>
+    <select onchange="addPlanProduct(this.value)">
+      <option value="">${addOpts?'+ Choisir un produit…':'Tous les produits éligibles sont déjà ajoutés'}</option>${addOpts}
+    </select></div></div>`;
   let body;
-  if(!elig.length) body='<div class="card"><div class="muted">Aucun produit avec une recette complète (code pâte défini). Renseignez d’abord les recettes.</div></div>';
-  else body=`<div class="card">${renderGroups(groupBy(elig,p=>p.categorie||'—'), itemFn)}</div>`;
+  if(!planEligible().length) body='<div class="card"><div class="muted">Aucun produit avec une recette complète (code pâte défini). Renseignez d’abord les recettes.</div></div>';
+  else if(!list.length) body='<div class="card"><div class="muted">Aucun produit dans le plan. Ajoutez les produits prévus avec le menu ci-dessus.</div></div>';
+  else body=`<div class="card">${list.map(itemFn).join('')}</div>`;
   const tot=planTotalPart(); const reste=100-tot; const over=tot>100;
-  return `<div class="card"><div class="muted">Pour chaque produit : une priorité (obligatoire), puis soit une quantité ferme, soit une part %.</div></div>
-    ${elig.length?grpBar():''}
+  return `<div class="card"><div class="muted">Ajoutez les produits prévus, puis pour chacun : une priorité (obligatoire), puis soit une quantité ferme, soit une part %.</div></div>
+    ${addCard}
     ${body}
     <div id="pltotbar" class="card" style="text-align:center;font-size:15px;background:${over?'#fdf1f3':'#eef4fb'};color:${over?'var(--rouge)':'var(--encre)'}">Réparti <b>${nf(tot,0)}%</b> · reste <b>${nf(Math.max(0,reste),0)}%</b>${over?' · <b>⚠ dépassement</b>':''}</div>
     <button class="btn" style="margin-top:6px;font-size:17px;padding:15px" onclick="doSimulate()">Simuler la production</button>`;
