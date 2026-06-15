@@ -189,7 +189,7 @@ hr{border:0;border-top:1px solid var(--ligne);margin:14px 0}
 <main id="view"></main>
 <div class="toast" id="toast"></div>
 <div class="overlay" id="loginOverlay" style="display:flex">
-  <form class="login-card" onsubmit="return doLogin(event)">
+  <form class="login-card" id="liLoginCard" onsubmit="return doLogin(event)">
     <h2>CIREPCI · Production</h2>
     <div class="muted">Connectez-vous pour continuer.</div>
     <div class="field"><label>E-mail</label><input id="liEmail" type="email" inputmode="email" autocomplete="username" required></div>
@@ -204,6 +204,14 @@ hr{border:0;border-top:1px solid var(--ligne);margin:14px 0}
       <button class="btn" id="liResetBtn" type="button" onclick="doReset()">Envoyer le lien de réinitialisation</button>
       <div class="login-err" id="liResetMsg"></div>
     </div>
+  </form>
+  <form class="login-card" id="liNewPwdCard" style="display:none" onsubmit="return doSetNewPassword(event)">
+    <h2>Nouveau mot de passe</h2>
+    <div class="muted">Choisissez un nouveau mot de passe pour votre compte.</div>
+    <div class="field"><label>Nouveau mot de passe</label><input id="liNewPwd" type="password" autocomplete="new-password" required></div>
+    <div class="field"><label>Confirmer le mot de passe</label><input id="liNewPwd2" type="password" autocomplete="new-password" required></div>
+    <button class="btn" id="liNewPwdBtn" type="submit">Enregistrer le mot de passe</button>
+    <div class="login-err" id="liNewPwdMsg"></div>
   </form>
 </div>
 
@@ -441,6 +449,45 @@ async function doReset(){
   catch(e){ msg.style.color=''; msg.textContent=e.message||'Échec de l\'envoi du lien.'; }
   finally{ btn.disabled=false; btn.textContent='Envoyer le lien de réinitialisation'; }
 }
+// Affiche l'écran « Nouveau mot de passe » (retour depuis le lien e-mail de réinitialisation).
+function showNewPasswordScreen(){
+  const o=document.getElementById('loginOverlay'); if(o) o.style.display='flex';
+  const login=document.getElementById('liLoginCard'); if(login) login.style.display='none';
+  const card=document.getElementById('liNewPwdCard'); if(card) card.style.display='';
+  const b=document.getElementById('btnLogout'); if(b) b.style.display='none';
+  const f=document.getElementById('liNewPwd'); if(f) f.focus();
+}
+// Revient au formulaire de connexion classique.
+function showLoginScreen(){
+  const card=document.getElementById('liNewPwdCard'); if(card) card.style.display='none';
+  const login=document.getElementById('liLoginCard'); if(login) login.style.display='';
+  showLogin();
+}
+async function sbUpdatePassword(pwd){
+  if(!sbClient && !sbInit()) throw new Error('Connexion impossible : librairie Supabase non chargée (réseau ?).');
+  const {error} = await sbClient.auth.updateUser({password:pwd});
+  if(error) throw new Error(traduireAuth(error.message));
+}
+async function doSetNewPassword(ev){ if(ev&&ev.preventDefault) ev.preventDefault();
+  const p1=document.getElementById('liNewPwd').value||'';
+  const p2=document.getElementById('liNewPwd2').value||'';
+  const msg=document.getElementById('liNewPwdMsg'); const btn=document.getElementById('liNewPwdBtn');
+  msg.style.color=''; msg.textContent='';
+  if(p1.length<6){ msg.textContent='Le mot de passe doit comporter au moins 6 caractères.'; return false; }
+  if(p1!==p2){ msg.textContent='Les deux mots de passe ne correspondent pas.'; return false; }
+  btn.disabled=true; btn.textContent='Enregistrement…';
+  try{ await sbUpdatePassword(p1);
+    try{ history.replaceState(null,'',location.pathname); }catch(e){}
+    msg.style.color='var(--vert)';
+    msg.textContent='Mot de passe mis à jour. Vous pouvez maintenant vous connecter.';
+    try{ if(sbClient) await sbClient.auth.signOut(); }catch(e){}
+    document.getElementById('liNewPwd').value=''; document.getElementById('liNewPwd2').value='';
+    setTimeout(showLoginScreen, 2200);
+  }
+  catch(e){ msg.style.color=''; msg.textContent=e.message||'Échec de la mise à jour du mot de passe.'; }
+  finally{ btn.disabled=false; btn.textContent='Enregistrer le mot de passe'; }
+  return false;
+}
 async function logout(){
   try{ if(sbClient) await sbClient.auth.signOut(); }catch(e){}
   try{ localStorage.removeItem(ROLE_KEY); }catch(e){}
@@ -465,8 +512,13 @@ async function boot(){
     loadLocalCache(); STATE.ui.role=localStorage.getItem(ROLE_KEY)||'admin';
     setOffline(true); showApp(); render(); return;
   }
+  // Retour depuis le lien e-mail : Supabase signale une récupération de mot de passe.
+  let _recovery = /type=recovery/.test(location.hash||'') || /[?&]type=recovery/.test(location.search||'');
+  try{ sbClient.auth.onAuthStateChange((event)=>{ if(event==='PASSWORD_RECOVERY'){ _recovery=true; showNewPasswordScreen(); } }); }catch(e){}
+  if(_recovery){ showNewPasswordScreen(); return; }
   try{
     const {data}=await sbClient.auth.getSession();
+    if(_recovery){ showNewPasswordScreen(); return; }
     if(data && data.session){ await afterLogin(); } else { showLogin(); }
   }catch(e){ // pas de réseau pour vérifier la session : on ouvre sur le cache
     loadLocalCache(); STATE.ui.role=localStorage.getItem(ROLE_KEY)||'admin';
