@@ -175,6 +175,9 @@ hr{border:0;border-top:1px solid var(--ligne);margin:14px 0}
 .login-card h2{font-size:18px;margin:0 0 4px}
 .login-card .muted{margin-bottom:16px}
 .login-err{color:var(--rouge);font-size:13px;font-weight:600;margin-top:8px;min-height:18px}
+.migbar{height:12px;background:var(--gris-c);border-radius:8px;overflow:hidden}
+.migbar-in{height:100%;width:0;background:var(--vert);transition:width .25s}
+.mig-err{color:var(--rouge)}
 </style>
 </head>
 <body>
@@ -205,6 +208,8 @@ let STATE, persist = true;
 const SB_URL = 'https://kuhmyyigpsocvawegtdl.supabase.co';
 const SB_KEY = 'sb_publishable_MV1SU3j-QaJcNqfcAj7TrQ_pfXnDsX5';
 const ROLE_KEY = 'cirepci_role';
+const BACKUP_KEY = 'cirepci_local_backup';      // copie figée des données locales d'origine
+const MIGRATION_DONE_KEY = 'cirepci_migration_done';
 let sbClient = null, sbOnline = true, _synced = null, _syncT = null, _paramId = null;
 
 // Tables synchronisées et leur clé primaire (code / nom / id).
@@ -246,6 +251,9 @@ function stateForCache(){ return {articles:STATE.articles,batches:STATE.batches,
   production:STATE.production,fournisseurs:STATE.fournisseurs,fournisseur_article:STATE.fournisseur_article,
   parametres:STATE.parametres,jours_ouvres:STATE.jours_ouvres,plan:STATE.plan}; }
 function cacheLocal(){ try{ localStorage.setItem(KEY, JSON.stringify(stateForCache())); }catch(e){} }
+// Préserve une seule fois les données locales d'origine avant qu'un chargement Supabase
+// n'écrase le cache. Permet la migration ultérieure même après connexion.
+function backupLocalOnce(){ try{ if(!localStorage.getItem(BACKUP_KEY)){ const r=localStorage.getItem(KEY); if(r) localStorage.setItem(BACKUP_KEY, r); } }catch(e){} }
 
 /* ---------- Auth ---------- */
 function traduireAuth(m){ m=String(m||'');
@@ -323,6 +331,53 @@ async function syncToSupabase(){
 function scheduleSync(){ if(!sbClient || !navigator.onLine || !sbOnline) return;
   clearTimeout(_syncT); _syncT=setTimeout(syncToSupabase, 700); }
 
+/* ---------- Migration unique des données locales vers Supabase ---------- */
+function migDone(){ try{ return localStorage.getItem(MIGRATION_DONE_KEY)||''; }catch(e){ return ''; } }
+function localBackupData(){ try{ const r=localStorage.getItem(BACKUP_KEY)||localStorage.getItem(KEY); return r?JSON.parse(r):null; }catch(e){ return null; } }
+function migStart(){
+  if(!navigator.onLine || !sbOnline){ toast('Hors-ligne : migration impossible'); return; }
+  if(migDone()){ if(!confirm('Vos données ont déjà été envoyées une fois. Renvoyer mettra à jour les enregistrements correspondants dans Supabase. Continuer ?')) return; }
+  else { if(!confirm('Envoyer toutes vos données locales vers Supabase ? Les enregistrements existants seront mis à jour (upsert). À ne faire qu\'une seule fois.')) return; }
+  runMigration();
+}
+async function runMigration(){
+  if(!sbClient && !sbInit()){ toast('Connexion Supabase requise'); return; }
+  const data=localBackupData();
+  const box=document.getElementById('migBox'), bar=document.getElementById('migBar'),
+        sum=document.getElementById('migSummary'), btn=document.getElementById('migBtn');
+  if(!data){ if(sum){ if(box) box.style.display='block'; sum.innerHTML='<div class="mig-err">Aucune donnée locale trouvée à migrer.</div>'; } return; }
+  if(btn) btn.disabled=true;
+  if(box) box.style.display='block';
+  const steps=SB_TABLES.concat([{n:'parametres',k:null}]);
+  const total=steps.length; let done=0; const results=[];
+  const paint=()=>{ if(bar) bar.style.width=Math.round(done/total*100)+'%';
+    if(sum) sum.innerHTML=results.map(r=>`<div class="${r.ok?'':'mig-err'}">${r.ok?'✓':'✗'} ${esc(r.label)} : ${r.ok?(r.count+' envoyé(s)'):('échec — '+esc(r.msg))}</div>`).join(''); };
+  for(const t of steps){
+    let count=0, ok=true, msg='';
+    try{
+      if(t.n==='parametres'){
+        const row=Object.assign({}, data.parametres||{}); row.jours_ouvres=data.jours_ouvres||[];
+        try{ const ex=await sbClient.from('parametres').select('id').limit(1).maybeSingle(); if(ex&&ex.data&&ex.data.id!==undefined&&ex.data.id!==null) row.id=ex.data.id; else if(_paramId!==null) row.id=_paramId; }catch(e){ if(_paramId!==null) row.id=_paramId; }
+        const {data:d,error}=await sbClient.from('parametres').upsert(row).select().maybeSingle();
+        if(error) throw error; if(d&&d.id!==undefined&&d.id!==null) _paramId=d.id; count=1;
+      } else {
+        let rows=(data[t.n]||[]).filter(r=>!rowBlank(r));
+        if(t.k==='id') rows.forEach(r=>{ if(r&&!r.id) r.id=uid(); });
+        rows=rows.filter(r=>{ const k=r[t.k]; return !(k===undefined||k===null||k===''); });
+        if(rows.length){ const {error}=await sbClient.from(t.n).upsert(rows,{onConflict:t.k}); if(error) throw error; }
+        count=rows.length;
+      }
+    }catch(e){ ok=false; msg=(e&&e.message)||'erreur'; }
+    done++; results.push({label:t.n, count, ok, msg}); paint();
+  }
+  const allOk=results.every(r=>r.ok);
+  if(allOk){ try{ localStorage.setItem(MIGRATION_DONE_KEY, new Date().toISOString()); }catch(e){}
+    if(sum) sum.innerHTML+='<div style="margin-top:8px;font-weight:600">Migration terminée. Rechargez l\'application pour afficher les données depuis Supabase.</div>';
+    toast('Migration terminée');
+  } else { toast('Migration terminée avec des erreurs'); }
+  if(btn){ btn.disabled=false; btn.textContent='Renvoyer les données'; }
+}
+
 /* ---------- Rôles (filtrage d'interface, pas de sécurité forte) ---------- */
 const ROLE_VISIBLE_TABS = {
   production:['accueil','besoins','plan','production','stock'],
@@ -367,6 +422,7 @@ async function afterLogin(){
   showApp(); render();
 }
 async function boot(){
+  backupLocalOnce();
   if('serviceWorker' in navigator && location.protocol==='https:'){ try{ navigator.serviceWorker.register('sw.js'); }catch(e){} }
   window.addEventListener('online', ()=>{ setOffline(false); scheduleSync(); });
   window.addEventListener('offline', ()=>setOffline(true));
@@ -497,19 +553,23 @@ function toggleGrp(h){ const wrap=h.parentNode; const items=wrap.querySelector('
   h.querySelector('.gchev').textContent = willExpand?'▾':'▸';
   if(willExpand) scrollCardIntoView(h);
 }
-function groupKeys(){ const s=STATE.ui.screen;
-  if(s==='articles') return groupBy(STATE.articles,a=>a.sous_categorie||a.categorie).map(g=>g[0]);
-  if(s==='batches') return groupBy(STATE.batches,b=>b.type).map(g=>g[0]);
-  if(s==='produits') return groupBy(STATE.produits,p=>p.categorie).map(g=>g[0]);
-  if(s==='stock'||s==='edit-inv') return groupBy(STATE.articles,a=>a.sous_categorie||a.categorie).map(g=>g[0]);
-  if(s==='commandes') return ['Ouverte','Partielle','Clôturée'];
-  if(s==='plan') return groupBy(planEligible(),p=>p.categorie||'—').map(g=>g[0]);
-  return []; }
-function expandAll(){ const s=STATE.ui.screen; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]={}; groupKeys().forEach(k=>STATE.ui.exp[s][k]=true); render(); }
-function collapseAll(){ const s=STATE.ui.screen; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]={}; render(); }
-function grpBar(){ return `<div class="stickybar"><div class="row" style="gap:8px">
-  <button class="btn sm ghost" onclick="expandAll()">Tout déplier</button>
-  <button class="btn sm ghost" onclick="collapseAll()">Tout replier</button></div></div>`; }
+// Déplie/replie toutes les sections de l'écran VISIBLE, en place (sans re-render global) :
+// met à jour le DOM et les flags STATE.ui.exp pour conserver l'état au prochain rendu.
+function setAllGroups(expand){
+  const s=STATE.ui.screen; STATE.ui.exp=STATE.ui.exp||{}; STATE.ui.exp[s]=STATE.ui.exp[s]||{};
+  const view=document.getElementById('view'); if(!view) return;
+  view.querySelectorAll('.grpwrap').forEach(w=>{
+    const items=w.querySelector('.grpitems'), chev=w.querySelector('.gchev'), key=w.dataset.key;
+    if(items) items.style.display = expand?'':'none';
+    if(chev) chev.textContent = expand?'▾':'▸';
+    if(key) STATE.ui.exp[s][key]=expand;
+  });
+}
+function expandAll(){ setAllGroups(true); }
+function collapseAll(){ setAllGroups(false); }
+function grpBar(){ return `<div class="stickybar"><div class="row" style="gap:8px;justify-content:flex-end">
+  <button class="btn sm ghost" onclick="expandAll()">▼ Tout déplier</button>
+  <button class="btn sm ghost" onclick="collapseAll()">▲ Tout replier</button></div></div>`; }
 function scrollCardIntoView(el){ if(!el) return; const hd=document.querySelector('header'); const hh=hd?hd.offsetHeight:0;
   const y=el.getBoundingClientRect().top + window.pageYOffset - hh - 8; window.scrollTo({top:y, behavior:'smooth'}); }
 function isBlankBatch(b){ return !b.code && poidsStd(b)===0; }
@@ -735,7 +795,7 @@ function viewAccueil(){
 
   const cardCoh=`<div class="card" onclick="go('produits')" style="cursor:pointer"><h2>Coh\u00e9rence des donn\u00e9es</h2>${incoh?`<div class="alert"><span>\u26a0</span><span>${incoh} incoh\u00e9rence(s) recette / batch \u00e0 v\u00e9rifier</span></div>`:'<div class="alert ok"><span>\u2713</span><span>Aucune incoh\u00e9rence d\u00e9tect\u00e9e</span></div>'}</div>`;
 
-  return stat+cardAppro+cardGoulots+cardProd+cardCmd+cardCoh;
+  return stat+cardAppro+(G.rows.length?grpBar():'')+cardGoulots+cardProd+cardCmd+cardCoh;
 }
 
 
@@ -1515,6 +1575,7 @@ function viewPlanSaisie(){
   else body=`<div class="card">${renderGroups(groupBy(elig,p=>p.categorie||'—'), itemFn)}</div>`;
   const tot=planTotalPart(); const reste=100-tot; const over=tot>100;
   return `<div class="card"><div class="muted">Pour chaque produit : une priorité (obligatoire), puis soit une quantité ferme, soit une part %.</div></div>
+    ${elig.length?grpBar():''}
     ${body}
     <div id="pltotbar" class="card" style="text-align:center;font-size:15px;background:${over?'#fdf1f3':'#eef4fb'};color:${over?'var(--rouge)':'var(--encre)'}">Réparti <b>${nf(tot,0)}%</b> · reste <b>${nf(Math.max(0,reste),0)}%</b>${over?' · <b>⚠ dépassement</b>':''}</div>
     <button class="btn" style="margin-top:6px;font-size:17px;padding:15px" onclick="doSimulate()">Simuler la production</button>`;
@@ -1786,6 +1847,13 @@ function viewReglages(){ const pm=STATE.parametres||{};
   <div class="card"><h2>Fournisseurs</h2>
     <div style="padding:0 0 6px">${STATE.fournisseurs.map(f=>`<div class="item" onclick="editFourn('${esc(f.id)}')"><div class="t"><div class="nm">${esc(f.nom||'(sans nom)')}</div><div class="sub"><span class="code">${esc(f.id)}</span> · délai moyen ${f.delai_moyen_jours} j</div></div><span class="chev">›</span></div>`).join('')}</div>
     <button class="btn sm sec" onclick="newFourn()">+ Fournisseur</button></div>
+  <div class="card"><h2>Migration vers Supabase</h2>
+    <div class="hint" style="margin-bottom:8px">Envoie une seule fois toutes vos données locales (localStorage) vers Supabase. Les enregistrements sont créés ou mis à jour (upsert) par leur clé.${migDone()?(' <b>Déjà effectuée</b> le '+esc(migDone().slice(0,10))+'.'):''}</div>
+    <button class="btn${migDone()?' sec':''}" id="migBtn" onclick="migStart()">${migDone()?'Données déjà envoyées — renvoyer':'Envoyer mes données locales vers Supabase'}</button>
+    <div id="migBox" style="display:none;margin-top:12px">
+      <div class="migbar"><div class="migbar-in" id="migBar"></div></div>
+      <div id="migSummary" style="margin-top:10px;font-size:13px"></div>
+    </div></div>
   ${viewDonnees()}`;
 }
 function setParam(k,v){ STATE.parametres[k]=parseFloat(String(v).replace(',','.'))||0; save(); }
