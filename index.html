@@ -226,7 +226,7 @@ const SB_TABLES = [
   {n:'batches',             k:'code'},
   {n:'produits',            k:'nom'},
   {n:'fournisseurs',        k:'id'},
-  {n:'fournisseur_article', k:'id'},
+  {n:'fournisseur_article', k:'id', conflict:'fournisseur,code'},
   {n:'previsionnel',        k:'id'},
   {n:'inventaires',         k:'id'},
   {n:'entrees_mp',          k:'id'},
@@ -334,7 +334,7 @@ async function syncToSupabase(){
       const cur=mapRows(t), prev=_synced[t.n]||{};
       const ups=[]; Object.keys(cur).forEach(k=>{ if(cur[k]!==prev[k]) ups.push(JSON.parse(cur[k])); });
       const dels=Object.keys(prev).filter(k=>!(k in cur));
-      if(ups.length){ const {error}=await sbClient.from(t.n).upsert(ups,{onConflict:t.k}); if(error) throw error; }
+      if(ups.length){ const {error}=await sbClient.from(t.n).upsert(ups,{onConflict:t.conflict||t.k}); if(error) throw error; }
       if(dels.length){ const {error}=await sbClient.from(t.n).delete().in(t.k,dels); if(error) throw error; }
       _synced[t.n]=cur;
     }catch(e){ console.warn('Sync '+t.n, e); toast('Sync « '+t.n+' » échouée'); }
@@ -353,7 +353,7 @@ async function pushAllToSupabase(){
   const errMsg=e=>{ try{ return (e&&(e.message||e.hint||e.details))||JSON.stringify(e); }catch(_){ return String(e); } };
   for(const t of SB_TABLES){
     try{ const cur=mapRows(t); const ups=Object.keys(cur).map(k=>JSON.parse(cur[k]));
-      if(ups.length){ const {error}=await sbClient.from(t.n).upsert(ups,{onConflict:t.k}); if(error) throw error; }
+      if(ups.length){ const {error}=await sbClient.from(t.n).upsert(ups,{onConflict:t.conflict||t.k}); if(error) throw error; }
     }catch(e){ console.warn('Push '+t.n, e); failed.push({n:t.n, msg:errMsg(e)}); }
   }
   try{ await syncParametres(); }catch(e){ console.warn('Push parametres', e); failed.push({n:'parametres', msg:errMsg(e)}); }
@@ -394,7 +394,7 @@ async function runMigration(){
         let rows=(data[t.n]||[]).filter(r=>!rowBlank(r));
         if(t.k==='id') rows.forEach(r=>{ if(r&&!r.id) r.id=uid(); });
         rows=rows.filter(r=>{ const k=r[t.k]; return !(k===undefined||k===null||k===''); });
-        if(rows.length){ const {error}=await sbClient.from(t.n).upsert(rows,{onConflict:t.k}); if(error) throw error; }
+        if(rows.length){ const {error}=await sbClient.from(t.n).upsert(rows,{onConflict:t.conflict||t.k}); if(error) throw error; }
         count=rows.length;
       }
     }catch(e){ ok=false; msg=(e&&e.message)||'erreur'; }
