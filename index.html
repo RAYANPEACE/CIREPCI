@@ -196,6 +196,14 @@ hr{border:0;border-top:1px solid var(--ligne);margin:14px 0}
     <div class="field"><label>Mot de passe</label><input id="liPwd" type="password" autocomplete="current-password" required></div>
     <button class="btn" id="liBtn" type="submit">Se connecter</button>
     <div class="login-err" id="liErr"></div>
+    <div style="text-align:center;margin-top:10px">
+      <a href="#" id="liForgotLink" onclick="return toggleReset(event)" style="color:#1b5faa;text-decoration:underline;font-size:14px">Mot de passe oublié ?</a>
+    </div>
+    <div id="liResetBox" style="display:none;margin-top:12px">
+      <div class="field"><label>E-mail</label><input id="liResetEmail" type="email" inputmode="email" autocomplete="username"></div>
+      <button class="btn" id="liResetBtn" type="button" onclick="doReset()">Envoyer le lien de réinitialisation</button>
+      <div class="login-err" id="liResetMsg"></div>
+    </div>
   </form>
 </div>
 
@@ -266,6 +274,12 @@ async function sbLogin(email, pwd){
   const {data,error} = await sbClient.auth.signInWithPassword({email, password:pwd});
   if(error) throw new Error(traduireAuth(error.message));
   return data;
+}
+async function sbResetPassword(email){
+  if(!sbClient && !sbInit()) throw new Error('Connexion impossible : librairie Supabase non chargée (réseau ?).');
+  const opts = { redirectTo: location.origin + location.pathname };
+  const {error} = await sbClient.auth.resetPasswordForEmail(email, opts);
+  if(error) throw new Error(traduireAuth(error.message));
 }
 async function fetchRole(){
   try{ const {data:u}=await sbClient.auth.getUser(); const id=u&&u.user&&u.user.id; if(!id) return null;
@@ -405,6 +419,27 @@ async function doLogin(ev){ if(ev&&ev.preventDefault) ev.preventDefault();
   catch(e){ err.textContent=e.message||'Échec de la connexion.'; }
   finally{ btn.disabled=false; btn.textContent='Se connecter'; }
   return false;
+}
+function toggleReset(ev){ if(ev&&ev.preventDefault) ev.preventDefault();
+  const box=document.getElementById('liResetBox'); if(!box) return false;
+  const open = box.style.display==='none' || box.style.display==='';
+  box.style.display = open ? 'block' : 'none';
+  if(open){ const e=document.getElementById('liResetEmail'); const li=document.getElementById('liEmail');
+    if(e){ if(li && li.value && !e.value) e.value=li.value; e.focus(); } }
+  return false;
+}
+async function doReset(){
+  const email=(document.getElementById('liResetEmail').value||'').trim();
+  const msg=document.getElementById('liResetMsg'); const btn=document.getElementById('liResetBtn');
+  msg.style.color=''; msg.textContent='';
+  if(!email || !/.+@.+\..+/.test(email)){ msg.textContent='Veuillez saisir une adresse e-mail valide.'; return; }
+  btn.disabled=true; btn.textContent='Envoi…';
+  try{ await sbResetPassword(email);
+    msg.style.color='var(--vert)';
+    msg.textContent='Si un compte existe pour cette adresse, un lien de réinitialisation vient d\'être envoyé. Vérifiez votre boîte de réception.';
+  }
+  catch(e){ msg.style.color=''; msg.textContent=e.message||'Échec de l\'envoi du lien.'; }
+  finally{ btn.disabled=false; btn.textContent='Envoyer le lien de réinitialisation'; }
 }
 async function logout(){
   try{ if(sbClient) await sbClient.auth.signOut(); }catch(e){}
