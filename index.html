@@ -794,7 +794,7 @@ function viewAccueil(){
 
   const cardCoh=`<div class="card" onclick="go('produits')" style="cursor:pointer"><h2>Coh\u00e9rence des donn\u00e9es</h2>${incoh?`<div class="alert"><span>\u26a0</span><span>${incoh} incoh\u00e9rence(s) recette / batch \u00e0 v\u00e9rifier</span></div>`:'<div class="alert ok"><span>\u2713</span><span>Aucune incoh\u00e9rence d\u00e9tect\u00e9e</span></div>'}</div>`;
 
-  return stat+cardAppro+cardGoulots+cardProd+cardCmd+cardCoh;
+  return stat+cardAppro+(G.rows.length?grpBar():'')+cardGoulots+cardProd+cardCmd+cardCoh;
 }
 
 
