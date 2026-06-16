@@ -1937,7 +1937,7 @@ function viewEditProd(){ const d=STATE.ui.editObj; if(!d) return '<div class="mu
     const batItem=(kind,b,i)=>{ const bb=batchByCode(b.code); const th=theo[b.code]||0;
       return `<div class="pblock">
       <div class="row spread" style="margin-bottom:7px"><div style="font-weight:700">${esc(bb?bb.nom:b.code)}</div><span class="code" style="margin:0">${esc(b.code)}</span></div>
-      <div class="hint" style="margin:-2px 0 8px">Théorique consommé : <b>${nf(th,1)} kg</b></div>
+      <div class="hint" style="margin:-2px 0 8px">Théorique consommé : <b id="pltheo-${kind}-${i}">${nf(th,1)} kg</b></div>
       <div class="fgrid"><div class="f"><label>Batchs</label><input inputmode="decimal" value="${b.nb_batchs||0}" onfocus="this.select()" oninput="setProd(${ei},'${kind}',${i},'nb_batchs',this.value)"></div>
         <div class="f"><label>Ajust. kg</label><input inputmode="decimal" value="${b.ajustement||0}" onfocus="this.select()" oninput="setProd(${ei},'${kind}',${i},'ajustement',this.value)"></div>
         <div class="f"><label>Restant kg</label><input inputmode="decimal" value="${b.restant||0}" onfocus="this.select()" oninput="setProd(${ei},'${kind}',${i},'restant',this.value)"></div></div></div>`; };
@@ -1970,8 +1970,15 @@ function declaTheo(e){ const t={}; (e.productions||[]).forEach(it=>{ const p=pro
     const ex=explodeProduct(p,q); if(ex.pate) t[ex.pate.code]=(t[ex.pate.code]||0)+ex.pate.kg; ex.cremes.forEach(c=>t[c.code]=(t[c.code]||0)+c.kg); }); return t; }
 function setProd(ei,kind,i,field,v){ const e=STATE.ui.editObj.equipes[ei]; const it=e[kind][i];
   if(field==='produit'||field==='code'){ it[field]=v; if(field==='produit') syncDeclas(e); renderInto(); }
-  else it[field]=parseFloat(String(v).replace(',','.'))||0;
+  else { it[field]=parseFloat(String(v).replace(',','.'))||0;
+    // Met à jour le « théorique consommé » EN PLACE (sans re-render) quand les cartons changent.
+    if(kind==='productions' && field==='cartons') refreshDeclaTheo(ei); }
   save(); }
+// Recalcule et réaffiche le théorique consommé de chaque pâte/crème d'une équipe.
+function refreshDeclaTheo(ei){ const e=STATE.ui.editObj&&STATE.ui.editObj.equipes&&STATE.ui.editObj.equipes[ei]; if(!e) return;
+  const theo=declaTheo(e);
+  ['pates','cremes'].forEach(kind=>{ (e[kind]||[]).forEach((b,i)=>{ const el=document.getElementById('pltheo-'+kind+'-'+i);
+    if(el) el.textContent=nf(theo[b.code]||0,1)+' kg'; }); }); }
 function addProd(ei,kind){ const e=STATE.ui.editObj.equipes[ei];
   if(kind==='productions') e.productions.push({produit:'',cartons:0,dechet_film:0,dechet_carton:0});
   else e[kind].push({code:'',nb_batchs:0,ajustement:0,restant:0});
