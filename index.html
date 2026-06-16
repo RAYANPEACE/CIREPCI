@@ -1978,7 +1978,7 @@ function prodSaisie(){
 }
 function viewEditProd(){ const d=STATE.ui.editObj; if(!d) return '<div class="muted">Introuvable.</div>';
   const prods=[...STATE.produits].sort((a,b)=>a.nom.localeCompare(b.nom));
-  const prodOpts=(sel)=>'<option value="">— produit —</option>'+groupBy(prods,p=>p.categorie).map(g=>`<optgroup label="${esc(g[0])}">`+g[1].map(p=>`<option ${p.nom===sel?'selected':''}>${esc(p.nom)}</option>`).join('')+'</optgroup>').join('');
+  const prodOpts=(sel)=>'<option value="">— produit —</option>'+groupBy(prods,p=>p.categorie).map(g=>`<optgroup label="${esc(g[0])}">`+g[1].map(p=>`<option value="${esc(p.nom)}" ${p.nom===sel?'selected':''}>${esc(p.nom)}</option>`).join('')+'</optgroup>').join('');
   const eqHtml=(e)=>{ const ei=e.n-1; syncDeclas(e); const theo=declaTheo(e);
     const prodItem=(it,i)=>`<div class="pblock">
       <select class="cname" onchange="setProd(${ei},'productions',${i},'produit',this.value)">${prodOpts(it.produit)}</select>
