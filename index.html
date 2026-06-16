@@ -1703,12 +1703,11 @@ function newCmdFor(code,qty){ const id='CMD-'+new Date().toISOString().slice(0,1
 /* ===================== PRODUCTION & PERTES ===================== */
 function prodByName(nom){ return STATE.produits.find(p=>p.nom===nom); }
 function explodeProduct(p,q){
-  const pctPate=+p.pct_pate||0; const hasCreme=!!p.code_creme; const fp=farinePate(p);
-  const R=1-((fp||0)*(+p.hum_farine_vrac||0)); const K=(hasCreme&&pctPate>0)?((1-pctPate)/pctPate):0;
-  const denom=R+K; const W=q*(+p.net_cartons||0); const out={pate:null,cremes:[],emb:[]};
-  if(p.code_pate&&denom>0){ const poidsPate=W/denom; out.pate={code:p.code_pate,kg:poidsPate}; const poidsCreme=poidsPate*K;
-    if(hasCreme&&poidsCreme>0){ const parts=[[p.code_creme,p.code_creme_2?(+p.pct_creme_1||0):1],[p.code_creme_2,+p.pct_creme_2||0]];
-      parts.forEach(pr=>{ if(pr[0]&&pr[1]>0) out.cremes.push({code:pr[0],kg:poidsCreme*pr[1]}); }); } }
+  const hasCreme=!!p.code_creme; const t=computeTheorique(p,q); // formules officielles, source unique
+  const out={pate:null,cremes:[],emb:[]};
+  if(p.code_pate&&(t.R+t.K)>0){ out.pate={code:p.code_pate,kg:t.poidsPate};
+    if(hasCreme&&t.poidsCreme>0){ const parts=[[p.code_creme,p.code_creme_2?(+p.pct_creme_1||0):1],[p.code_creme_2,+p.pct_creme_2||0]];
+      parts.forEach(pr=>{ if(pr[0]&&pr[1]>0) out.cremes.push({code:pr[0],kg:t.poidsCreme*pr[1]}); }); } }
   (p.emballages||[]).forEach(e=> out.emb.push({code:e.code,qte:(+e.qte||0)*q,sous_cat:e.sous_cat}));
   return out;
 }
@@ -2044,6 +2043,23 @@ function suggestBatches(ei){ const e=STATE.ui.editObj.equipes[ei]; const pc=new 
   renderInto(); save(); toast('Codes pâte/crème déduits'); }
 function delProduction(){ const d=STATE.ui.editObj; if(!confirm('Supprimer la journée du '+(d.date||'?')+' ?'))return;
   STATE.production=STATE.production.filter(x=>x!==d); save(); go('production'); toast('Journée supprimée'); }
+// Consommation théorique pâte/crème à partir des cartons saisis — formules officielles.
+// Valeurs prises sur l'objet produit : net_cartons, pct_pate, pct_farine_pate, hum_farine_vrac.
+//   R = 1 − pct_farine_pate × hum_farine_vrac
+//   K = (1 − pct_pate) / pct_pate          (0 si pct_pate = 1 ; et si pct_pate ≤ 0, par sécurité)
+//   Poids_Pate  = (cartons × net_cartons) / (R + K)
+//   Poids_Creme = Poids_Pate × K
+// Source unique du calcul : explodeProduct() délègue ici, donc declaTheo() / refreshDeclaTheo()
+// (rafraîchis à chaque saisie du champ « cartons », en place sans re-render global) en héritent.
+function computeTheorique(produit, qteCartons){
+  if(!produit) return {R:1, K:0, poidsPate:0, poidsCreme:0};
+  const pctPate = +produit.pct_pate || 0;
+  const R = 1 - ((+produit.pct_farine_pate || 0) * (+produit.hum_farine_vrac || 0));
+  const K = (pctPate > 0 && pctPate !== 1) ? ((1 - pctPate) / pctPate) : 0;
+  const denom = R + K;
+  const poidsPate = denom > 0 ? ((+qteCartons || 0) * (+produit.net_cartons || 0)) / denom : 0;
+  return {R, K, poidsPate, poidsCreme: poidsPate * K};
+}
 /* ---- pertes ---- */
 function pertesDays(){ const f=STATE.ui.pertesFrom, t=STATE.ui.pertesTo;
   if(f||t){ const F=f||'0000-00-00', T=t||'9999-99-99'; return STATE.production.filter(d=>d.date && d.date>=F && d.date<=T); }
