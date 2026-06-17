@@ -352,6 +352,10 @@ async function syncToSupabase(){
 }
 function scheduleSync(){ if(!sbClient || !navigator.onLine || !sbOnline) return;
   clearTimeout(_syncT); _syncT=setTimeout(syncToSupabase, 700); }
+// Force la synchro immédiate (annule le debounce). À utiliser après une action
+// destructrice/critique (suppression, validation) pour éviter qu'un rechargement
+// précoce ne re-télécharge depuis le cloud une ligne déjà supprimée localement.
+function flushSync(){ clearTimeout(_syncT); return syncToSupabase(); }
 // Pousse TOUTES les données locales vers Supabase (upsert complet, sans suppression).
 // Utilisé après une restauration : le cloud étant la source de vérité à la connexion,
 // la sauvegarde doit y être écrite immédiatement sinon elle sera écrasée au rechargement.
@@ -1703,12 +1707,11 @@ function newCmdFor(code,qty){ const id='CMD-'+new Date().toISOString().slice(0,1
 /* ===================== PRODUCTION & PERTES ===================== */
 function prodByName(nom){ return STATE.produits.find(p=>p.nom===nom); }
 function explodeProduct(p,q){
-  const pctPate=+p.pct_pate||0; const hasCreme=!!p.code_creme; const fp=farinePate(p);
-  const R=1-((fp||0)*(+p.hum_farine_vrac||0)); const K=(hasCreme&&pctPate>0)?((1-pctPate)/pctPate):0;
-  const denom=R+K; const W=q*(+p.net_cartons||0); const out={pate:null,cremes:[],emb:[]};
-  if(p.code_pate&&denom>0){ const poidsPate=W/denom; out.pate={code:p.code_pate,kg:poidsPate}; const poidsCreme=poidsPate*K;
-    if(hasCreme&&poidsCreme>0){ const parts=[[p.code_creme,p.code_creme_2?(+p.pct_creme_1||0):1],[p.code_creme_2,+p.pct_creme_2||0]];
-      parts.forEach(pr=>{ if(pr[0]&&pr[1]>0) out.cremes.push({code:pr[0],kg:poidsCreme*pr[1]}); }); } }
+  const hasCreme=!!p.code_creme; const t=computeTheorique(p,q); // formules officielles, source unique
+  const out={pate:null,cremes:[],emb:[]};
+  if(p.code_pate&&(t.R+t.K)>0){ out.pate={code:p.code_pate,kg:t.poidsPate};
+    if(hasCreme&&t.poidsCreme>0){ const parts=[[p.code_creme,p.code_creme_2?(+p.pct_creme_1||0):1],[p.code_creme_2,+p.pct_creme_2||0]];
+      parts.forEach(pr=>{ if(pr[0]&&pr[1]>0) out.cremes.push({code:pr[0],kg:t.poidsCreme*pr[1]}); }); } }
   (p.emballages||[]).forEach(e=> out.emb.push({code:e.code,qte:(+e.qte||0)*q,sous_cat:e.sous_cat}));
   return out;
 }
@@ -1901,10 +1904,20 @@ function viewPlanResultats(){
 /* =================== fin MODULE PLAN =================== */
 
 /* ---- saisie ---- */
+// Édition « brouillon » : on travaille sur une COPIE dans STATE.ui.editObj.
+// STATE.production n'est touché qu'à la validation explicite (validerProduction)
+// ou à la suppression. Quitter l'écran sans valider abandonne donc le brouillon.
 function newProduction(){ const eq=n=>({n,productions:[],pates:[],cremes:[]});
-  const d={date:new Date().toISOString().slice(0,10),equipes:[eq(1),eq(2),eq(3)]};
-  STATE.production.push(d); STATE.ui.editObj=d; go('edit-prod'); }
-function editProd(date){ STATE.ui.editObj=STATE.production.find(d=>d.date===date); go('edit-prod'); }
+  STATE.ui.editObj={date:'',equipes:[eq(1),eq(2),eq(3)]};
+  STATE.ui.editOrig=null; STATE.ui.editNew=true; go('edit-prod'); }
+function editProd(idx){ const orig=STATE.production[idx]; if(!orig){ toast('Journée introuvable'); return; }
+  STATE.ui.editObj=clone(orig); STATE.ui.editOrig=orig; STATE.ui.editNew=false; go('edit-prod'); }
+// Validation explicite : seul moment où STATE.production est modifié.
+async function validerProduction(){ const d=STATE.ui.editObj; if(!d) return;
+  if(!d.date){ toast('Renseignez la date de la journée.'); return; }
+  if(STATE.ui.editNew){ STATE.production.push(d); }
+  else { const i=STATE.production.indexOf(STATE.ui.editOrig); if(i>=0) STATE.production[i]=d; else STATE.production.push(d); }
+  STATE.ui.editNew=false; STATE.ui.editOrig=d; save(); await flushSync(); go('production'); toast('Journée enregistrée'); }
 function viewProduction(){
   if(!STATE.ui.prodTab) STATE.ui.prodTab='saisie'; const tab=STATE.ui.prodTab;
   const head=`<div class="card"><div class="seg">
@@ -1969,7 +1982,7 @@ function viewBudgetReel(){
 function prodSaisie(){
   const list=[...STATE.production].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const rows=list.map(d=>{ let cart=0; (d.equipes||[]).forEach(e=>(e.productions||[]).forEach(it=>cart+=(+it.cartons||0)));
-    return `<div class="item" data-s="${(d.date||'').toLowerCase()}" onclick="editProd('${d.date}')">
+    return `<div class="item" data-s="${(d.date||'').toLowerCase()}" onclick="editProd(${STATE.production.indexOf(d)})">
       <div class="t"><div class="nm">${d.date||'(sans date)'}</div><div class="sub">3 équipes · <span class="num">${nf(cart,0)}</span> cartons</div></div>
       <span class="chev">›</span></div>`; }).join('');
   return `<input class="search" placeholder="Rechercher une date…" oninput="filterList(this.value,'prod_j')">
@@ -2007,9 +2020,11 @@ function viewEditProd(){ const d=STATE.ui.editObj; if(!d) return '<div class="mu
     </div>`; };
   return `<button class="back" onclick="go('production')">‹ Production</button>
   <div class="card"><div class="field" style="margin-bottom:0"><label>Date de production</label>
-    <input type="date" value="${d.date||''}" oninput="STATE.ui.editObj.date=this.value;save()"></div></div>
+    <input type="date" value="${d.date||''}" oninput="STATE.ui.editObj.date=this.value"></div></div>
   ${(d.equipes||[]).map(eqHtml).join('')}
-  <div class="card"><button class="btn danger" onclick="delProduction()">Supprimer cette journée</button></div>`;
+  <div class="card"><div class="hint" style="margin:-2px 0 9px">Les modifications ne sont enregistrées qu'en validant ; quitter sans valider abandonne la saisie.</div>
+    <button class="btn" onclick="validerProduction()">${STATE.ui.editNew?'Créer la journée':'Enregistrer les modifications'}</button>
+    <button class="btn danger" style="margin-top:9px" onclick="delProduction()">${STATE.ui.editNew?'Abandonner':'Supprimer cette journée'}</button></div>`;
 }
 function syncDeclas(e){ const pc=[],cc=[]; const sP=new Set(),sC=new Set();
   (e.productions||[]).forEach(it=>{ const p=prodByName(it.produit); if(!p)return;
@@ -2042,8 +2057,29 @@ function suggestBatches(ei){ const e=STATE.ui.editObj.equipes[ei]; const pc=new 
   pc.forEach(code=>{ if(!e.pates.some(b=>b.code===code)) e.pates.push({code,nb_batchs:0,ajustement:0,restant:0}); });
   cc.forEach(code=>{ if(!e.cremes.some(b=>b.code===code)) e.cremes.push({code,nb_batchs:0,ajustement:0,restant:0}); });
   renderInto(); save(); toast('Codes pâte/crème déduits'); }
-function delProduction(){ const d=STATE.ui.editObj; if(!confirm('Supprimer la journée du '+(d.date||'?')+' ?'))return;
-  STATE.production=STATE.production.filter(x=>x!==d); save(); go('production'); toast('Journée supprimée'); }
+async function delProduction(){
+  if(STATE.ui.editNew){ STATE.ui.editObj=null; STATE.ui.editNew=false; STATE.ui.editOrig=null;
+    go('production'); toast('Brouillon abandonné'); return; }
+  const d=STATE.ui.editObj; if(!confirm('Supprimer la journée du '+((d&&d.date)||'?')+' ?'))return;
+  STATE.production=STATE.production.filter(x=>x!==STATE.ui.editOrig);
+  STATE.ui.editOrig=null; save(); await flushSync(); go('production'); toast('Journée supprimée'); }
+// Consommation théorique pâte/crème à partir des cartons saisis — formules officielles.
+// Valeurs prises sur l'objet produit : net_cartons, pct_pate, pct_farine_pate, hum_farine_vrac.
+//   R = 1 − pct_farine_pate × hum_farine_vrac
+//   K = (1 − pct_pate) / pct_pate          (0 si pct_pate = 1 ; et si pct_pate ≤ 0, par sécurité)
+//   Poids_Pate  = (cartons × net_cartons) / (R + K)
+//   Poids_Creme = Poids_Pate × K
+// Source unique du calcul : explodeProduct() délègue ici, donc declaTheo() / refreshDeclaTheo()
+// (rafraîchis à chaque saisie du champ « cartons », en place sans re-render global) en héritent.
+function computeTheorique(produit, qteCartons){
+  if(!produit) return {R:1, K:0, poidsPate:0, poidsCreme:0};
+  const pctPate = +produit.pct_pate || 0;
+  const R = 1 - ((+produit.pct_farine_pate || 0) * (+produit.hum_farine_vrac || 0));
+  const K = (pctPate > 0 && pctPate !== 1) ? ((1 - pctPate) / pctPate) : 0;
+  const denom = R + K;
+  const poidsPate = denom > 0 ? ((+qteCartons || 0) * (+produit.net_cartons || 0)) / denom : 0;
+  return {R, K, poidsPate, poidsCreme: poidsPate * K};
+}
 /* ---- pertes ---- */
 function pertesDays(){ const f=STATE.ui.pertesFrom, t=STATE.ui.pertesTo;
   if(f||t){ const F=f||'0000-00-00', T=t||'9999-99-99'; return STATE.production.filter(d=>d.date && d.date>=F && d.date<=T); }
