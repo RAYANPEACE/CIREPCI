@@ -1908,7 +1908,7 @@ function viewPlanResultats(){
 // STATE.production n'est touché qu'à la validation explicite (validerProduction)
 // ou à la suppression. Quitter l'écran sans valider abandonne donc le brouillon.
 function newProduction(){ const eq=n=>({n,productions:[],pates:[],cremes:[]});
-  STATE.ui.editObj={date:'',equipes:[eq(1),eq(2),eq(3)]};
+  STATE.ui.editObj={date:new Date().toISOString().slice(0,10),equipes:[eq(1),eq(2),eq(3)]};
   STATE.ui.editOrig=null; STATE.ui.editNew=true; go('edit-prod'); }
 function editProd(idx){ const orig=STATE.production[idx]; if(!orig){ toast('Journée introuvable'); return; }
   STATE.ui.editObj=clone(orig); STATE.ui.editOrig=orig; STATE.ui.editNew=false; go('edit-prod'); }
@@ -1992,17 +1992,19 @@ function prodSaisie(){
 function viewEditProd(){ const d=STATE.ui.editObj; if(!d) return '<div class="muted">Introuvable.</div>';
   const prods=[...STATE.produits].sort((a,b)=>a.nom.localeCompare(b.nom));
   const prodOpts=(sel)=>'<option value="">— produit —</option>'+groupBy(prods,p=>p.categorie).map(g=>`<optgroup label="${esc(g[0])}">`+g[1].map(p=>`<option value="${esc(p.nom)}" ${p.nom===sel?'selected':''}>${esc(p.nom)}</option>`).join('')+'</optgroup>').join('');
-  const eqHtml=(e)=>{ const ei=e.n-1; syncDeclas(e); const theo=declaTheo(e);
+  const eqHtml=(e)=>{ const ei=e.n-1; syncDeclas(e); const D=declaTheoFull(e);
     const prodItem=(it,i)=>`<div class="pblock">
       <select class="cname" onchange="setProd(${ei},'productions',${i},'produit',this.value)">${prodOpts(it.produit)}</select>
       <div class="fgrid"><div class="f"><label>Cartons</label><input inputmode="numeric" value="${it.cartons||0}" onfocus="this.select()" oninput="setProd(${ei},'productions',${i},'cartons',this.value)"></div>
         <div class="f"><label>Déchet film kg</label><input inputmode="decimal" value="${it.dechet_film||0}" onfocus="this.select()" oninput="setProd(${ei},'productions',${i},'dechet_film',this.value)"></div>
         <div class="f"><label>Déchet carton nb</label><input inputmode="numeric" value="${it.dechet_carton||0}" onfocus="this.select()" oninput="setProd(${ei},'productions',${i},'dechet_carton',this.value)"></div></div>
       <button class="rmbtn" onclick="rmProd(${ei},'productions',${i})">✕ Retirer ce produit</button></div>`;
-    const batItem=(kind,b,i)=>{ const bb=batchByCode(b.code); const th=theo[b.code]||0;
+    const batItem=(kind,b,i)=>{ const bb=batchByCode(b.code); const th=D.theo[b.code]||0; const seuil=D.seuilPct(b.code);
+      const c=batCompare(b,th,seuil); const col=c.derive?'var(--rouge)':'var(--vert)';
       return `<div class="pblock">
       <div class="row spread" style="margin-bottom:7px"><div style="font-weight:700">${esc(bb?bb.nom:b.code)}</div><span class="code" style="margin:0">${esc(b.code)}</span></div>
-      <div class="hint" style="margin:-2px 0 8px">Théorique consommé : <b id="pltheo-${kind}-${i}">${nf(th,1)} kg</b></div>
+      <div class="hint" style="margin:-2px 0 4px">Théorique : <b id="pltheo-${kind}-${i}">${nf(th,1)} kg</b> · Réel : <b id="plreel-${kind}-${i}" style="color:${c.hasReal?col:'inherit'}">${c.hasReal?nf(c.real,1)+' kg':'—'}</b></div>
+      <div class="hint" style="margin:0 0 8px">Écart : <b id="plecart-${kind}-${i}" style="color:${c.hasReal?col:''}" class="${c.hasReal?'':'muted'}">${c.hasReal?ecartTxt(c):'—'}</b>${seuil!==null?` <span class="muted">(seuil ${nf(seuil,1)} %)</span>`:''}</div>
       <div class="fgrid"><div class="f"><label>Batchs</label><input inputmode="decimal" value="${b.nb_batchs||0}" onfocus="this.select()" oninput="setProd(${ei},'${kind}',${i},'nb_batchs',this.value)"></div>
         <div class="f"><label>Ajust. kg</label><input inputmode="decimal" value="${b.ajustement||0}" onfocus="this.select()" oninput="setProd(${ei},'${kind}',${i},'ajustement',this.value)"></div>
         <div class="f"><label>Restant kg</label><input inputmode="decimal" value="${b.restant||0}" onfocus="this.select()" oninput="setProd(${ei},'${kind}',${i},'restant',this.value)"></div></div></div>`; };
@@ -2019,12 +2021,14 @@ function viewEditProd(){ const d=STATE.ui.editObj; if(!d) return '<div class="mu
       <div class="seclabel creme">Crèmes déclarées</div>${(e.cremes||[]).length?declaHint+(e.cremes).map((b,i)=>batItem('cremes',b,i)).join(''):noDecla}
     </div>`; };
   return `<button class="back" onclick="go('production')">‹ Production</button>
+  <div class="stickybar"><div class="row" style="gap:8px">
+    <button class="btn sm" style="flex:1" onclick="validerProduction()">${STATE.ui.editNew?'Créer la journée':'Enregistrer'}</button>
+    <button class="btn sm danger" style="flex:1" onclick="delProduction()">${STATE.ui.editNew?'Abandonner':'Supprimer'}</button>
+  </div></div>
   <div class="card"><div class="field" style="margin-bottom:0"><label>Date de production</label>
-    <input type="date" value="${d.date||''}" oninput="STATE.ui.editObj.date=this.value"></div></div>
-  ${(d.equipes||[]).map(eqHtml).join('')}
-  <div class="card"><div class="hint" style="margin:-2px 0 9px">Les modifications ne sont enregistrées qu'en validant ; quitter sans valider abandonne la saisie.</div>
-    <button class="btn" onclick="validerProduction()">${STATE.ui.editNew?'Créer la journée':'Enregistrer les modifications'}</button>
-    <button class="btn danger" style="margin-top:9px" onclick="delProduction()">${STATE.ui.editNew?'Abandonner':'Supprimer cette journée'}</button></div>`;
+    <input type="date" value="${d.date||''}" oninput="STATE.ui.editObj.date=this.value"></div>
+    <div class="hint" style="margin:8px 0 0">Les modifications ne sont enregistrées qu'en validant ; quitter sans valider abandonne la saisie.</div></div>
+  ${(d.equipes||[]).map(eqHtml).join('')}`;
 }
 function syncDeclas(e){ const pc=[],cc=[]; const sP=new Set(),sC=new Set();
   (e.productions||[]).forEach(it=>{ const p=prodByName(it.produit); if(!p)return;
@@ -2033,19 +2037,38 @@ function syncDeclas(e){ const pc=[],cc=[]; const sP=new Set(),sC=new Set();
   const recon=(arr,codes)=>{ arr=arr||[]; const by={}; arr.forEach(b=>{ if(b.code&&by[b.code]===undefined) by[b.code]=b; });
     return codes.map(code=>by[code]||{code,nb_batchs:0,ajustement:0,restant:0}); };
   e.pates=recon(e.pates,pc); e.cremes=recon(e.cremes,cc); }
-function declaTheo(e){ const t={}; (e.productions||[]).forEach(it=>{ const p=prodByName(it.produit); const q=+it.cartons||0; if(!p||!(q>0))return;
-    const ex=explodeProduct(p,q); if(ex.pate) t[ex.pate.code]=(t[ex.pate.code]||0)+ex.pate.kg; ex.cremes.forEach(c=>t[c.code]=(t[c.code]||0)+c.kg); }); return t; }
 function setProd(ei,kind,i,field,v){ const e=STATE.ui.editObj.equipes[ei]; const it=e[kind][i];
   if(field==='produit'||field==='code'){ it[field]=v; if(field==='produit') syncDeclas(e); renderInto(); }
   else { it[field]=parseFloat(String(v).replace(',','.'))||0;
-    // Met à jour le « théorique consommé » EN PLACE (sans re-render) quand les cartons changent.
-    if(kind==='productions' && field==='cartons') refreshDeclaTheo(ei); }
+    // Cartons -> théorique ; batchs/ajust/restant -> réel & écart. Mise à jour EN PLACE (sans re-render).
+    refreshDecla(ei); }
   save(); }
-// Recalcule et réaffiche le théorique consommé de chaque pâte/crème d'une équipe.
-function refreshDeclaTheo(ei){ const e=STATE.ui.editObj&&STATE.ui.editObj.equipes&&STATE.ui.editObj.equipes[ei]; if(!e) return;
-  const theo=declaTheo(e);
-  ['pates','cremes'].forEach(kind=>{ (e[kind]||[]).forEach((b,i)=>{ const el=document.getElementById('pltheo-'+kind+'-'+i);
-    if(el) el.textContent=nf(theo[b.code]||0,1)+' kg'; }); }); }
+// Réel engagé d'un batch déclaré : Nb × poids_std + ajustement − restant.
+function batReal(b){ const bb=batchByCode(b.code); const std=bb?poidsStd(bb):0; return (+b.nb_batchs||0)*std+(+b.ajustement||0)-(+b.restant||0); }
+// Compare réel/théorique ; « dérive » = écart % au-dessus du seuil de tolérance de la recette.
+function batCompare(b,theo,seuil){ const real=batReal(b);
+  const hasReal=((+b.nb_batchs||0)!==0)||((+b.ajustement||0)!==0)||((+b.restant||0)!==0);
+  const perte=real-theo; const pct=theo>0?perte/theo*100:(real>0?100:0);
+  const derive=hasReal && ((seuil!==null&&pct>seuil)||(theo<=0&&real>0));
+  return {real,hasReal,perte,pct,derive}; }
+function ecartTxt(c){ return (c.perte>=0?'+':'')+nf(c.perte,1)+' kg ('+(c.perte>=0?'+':'')+nf(c.pct,1)+' %)'; }
+// Théorique + seuil de tolérance pondéré par produit (pertes_matiere), par batch déclaré d'une équipe.
+function declaTheoFull(e){ const theo={},sN={},sD={};
+  (e.productions||[]).forEach(it=>{ const p=prodByName(it.produit); const q=+it.cartons||0; if(!p||!(q>0))return;
+    const ex=explodeProduct(p,q); const sm=+p.pertes_matiere||0;
+    const add=(code,kg)=>{ theo[code]=(theo[code]||0)+kg; sN[code]=(sN[code]||0)+kg*sm; sD[code]=(sD[code]||0)+kg; };
+    if(ex.pate) add(ex.pate.code,ex.pate.kg); ex.cremes.forEach(c=>add(c.code,c.kg)); });
+  return {theo, seuilPct:code=>sD[code]>0?(sN[code]/sD[code]*100):null}; }
+function declaTheo(e){ return declaTheoFull(e).theo; }
+// Met à jour EN PLACE le théorique, le réel et l'écart (couleur + kg + %) de chaque pâte/crème.
+function refreshDecla(ei){ const e=STATE.ui.editObj&&STATE.ui.editObj.equipes&&STATE.ui.editObj.equipes[ei]; if(!e) return;
+  const D=declaTheoFull(e);
+  ['pates','cremes'].forEach(kind=>{ (e[kind]||[]).forEach((b,i)=>{
+    const th=D.theo[b.code]||0; const c=batCompare(b,th,D.seuilPct(b.code)); const col=c.derive?'var(--rouge)':'var(--vert)';
+    const elT=document.getElementById('pltheo-'+kind+'-'+i); if(elT) elT.textContent=nf(th,1)+' kg';
+    const elR=document.getElementById('plreel-'+kind+'-'+i); if(elR){ elR.textContent=c.hasReal?nf(c.real,1)+' kg':'—'; elR.style.color=c.hasReal?col:''; }
+    const elE=document.getElementById('plecart-'+kind+'-'+i); if(elE){ if(c.hasReal){ elE.textContent=ecartTxt(c); elE.style.color=col; elE.className=''; } else { elE.textContent='—'; elE.style.color=''; elE.className='muted'; } }
+  }); }); }
 function addProd(ei,kind){ const e=STATE.ui.editObj.equipes[ei];
   if(kind==='productions') e.productions.push({produit:'',cartons:0,dechet_film:0,dechet_carton:0});
   else e[kind].push({code:'',nb_batchs:0,ajustement:0,restant:0});
