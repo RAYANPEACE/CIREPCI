@@ -352,6 +352,10 @@ async function syncToSupabase(){
 }
 function scheduleSync(){ if(!sbClient || !navigator.onLine || !sbOnline) return;
   clearTimeout(_syncT); _syncT=setTimeout(syncToSupabase, 700); }
+// Force la synchro immédiate (annule le debounce). À utiliser après une action
+// destructrice/critique (suppression, validation) pour éviter qu'un rechargement
+// précoce ne re-télécharge depuis le cloud une ligne déjà supprimée localement.
+function flushSync(){ clearTimeout(_syncT); return syncToSupabase(); }
 // Pousse TOUTES les données locales vers Supabase (upsert complet, sans suppression).
 // Utilisé après une restauration : le cloud étant la source de vérité à la connexion,
 // la sauvegarde doit y être écrite immédiatement sinon elle sera écrasée au rechargement.
@@ -1909,11 +1913,11 @@ function newProduction(){ const eq=n=>({n,productions:[],pates:[],cremes:[]});
 function editProd(idx){ const orig=STATE.production[idx]; if(!orig){ toast('Journée introuvable'); return; }
   STATE.ui.editObj=clone(orig); STATE.ui.editOrig=orig; STATE.ui.editNew=false; go('edit-prod'); }
 // Validation explicite : seul moment où STATE.production est modifié.
-function validerProduction(){ const d=STATE.ui.editObj; if(!d) return;
+async function validerProduction(){ const d=STATE.ui.editObj; if(!d) return;
   if(!d.date){ toast('Renseignez la date de la journée.'); return; }
   if(STATE.ui.editNew){ STATE.production.push(d); }
   else { const i=STATE.production.indexOf(STATE.ui.editOrig); if(i>=0) STATE.production[i]=d; else STATE.production.push(d); }
-  STATE.ui.editNew=false; STATE.ui.editOrig=d; save(); go('production'); toast('Journée enregistrée'); }
+  STATE.ui.editNew=false; STATE.ui.editOrig=d; save(); await flushSync(); go('production'); toast('Journée enregistrée'); }
 function viewProduction(){
   if(!STATE.ui.prodTab) STATE.ui.prodTab='saisie'; const tab=STATE.ui.prodTab;
   const head=`<div class="card"><div class="seg">
@@ -2053,12 +2057,12 @@ function suggestBatches(ei){ const e=STATE.ui.editObj.equipes[ei]; const pc=new 
   pc.forEach(code=>{ if(!e.pates.some(b=>b.code===code)) e.pates.push({code,nb_batchs:0,ajustement:0,restant:0}); });
   cc.forEach(code=>{ if(!e.cremes.some(b=>b.code===code)) e.cremes.push({code,nb_batchs:0,ajustement:0,restant:0}); });
   renderInto(); save(); toast('Codes pâte/crème déduits'); }
-function delProduction(){
+async function delProduction(){
   if(STATE.ui.editNew){ STATE.ui.editObj=null; STATE.ui.editNew=false; STATE.ui.editOrig=null;
     go('production'); toast('Brouillon abandonné'); return; }
   const d=STATE.ui.editObj; if(!confirm('Supprimer la journée du '+((d&&d.date)||'?')+' ?'))return;
   STATE.production=STATE.production.filter(x=>x!==STATE.ui.editOrig);
-  STATE.ui.editOrig=null; save(); go('production'); toast('Journée supprimée'); }
+  STATE.ui.editOrig=null; save(); await flushSync(); go('production'); toast('Journée supprimée'); }
 // Consommation théorique pâte/crème à partir des cartons saisis — formules officielles.
 // Valeurs prises sur l'objet produit : net_cartons, pct_pate, pct_farine_pate, hum_farine_vrac.
 //   R = 1 − pct_farine_pate × hum_farine_vrac
